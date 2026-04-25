@@ -772,15 +772,17 @@ html, body, #root {
 }
 
 /* ============================================================
-   SETTINGS BUTTON (bottom-left, mirrors theme-toggle)
+   SETTINGS BUTTON (sits to the left of the theme toggle)
    ============================================================ */
 .settings-btn {
   position: fixed;
   bottom: 16px;
-  left: 20px;
+  /* theme-toggle is roughly 70px wide @ 14px padding + 'LIGHT' text;
+     12px gap between the two */
+  right: 96px;
   font-family: 'Space Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 9px;
+  letter-spacing: 0.2em;
   padding: 8px 14px;
   background: var(--tile-bg);
   color: var(--text-secondary);

@@ -13,13 +13,29 @@ export default function WeatherTile() {
     const tick = async () => {
       try {
         const data = await sys.weather()
-        if (!cancelled && data) setW(data)
+        if (cancelled) return
+        // Reset to the empty shape if main returned null (no location set yet)
+        setW(data ?? {
+          tempF: null, condition: '—', humidity: null,
+          windSpeed: null, windDir: '—',
+        })
       } catch { /* ignore */ }
     }
     tick()
     // Refresh every 30 min (main process caches, so this is cheap)
     const id = setInterval(tick, 30 * 60 * 1000)
-    return () => { cancelled = true; clearInterval(id) }
+
+    // Refetch immediately when settings change
+    const onSettings = (e) => {
+      if (e.detail?.changed?.includes('weather')) tick()
+    }
+    window.addEventListener('bento:settings-changed', onSettings)
+
+    return () => {
+      cancelled = true
+      clearInterval(id)
+      window.removeEventListener('bento:settings-changed', onSettings)
+    }
   }, [])
 
   const temp = w.tempF !== null ? String(w.tempF) : '—'

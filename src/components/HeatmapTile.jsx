@@ -54,12 +54,25 @@ export default function HeatmapTile() {
   const [live, setLive] = useState(false)
 
   useEffect(() => {
-    sys.githubHeatmap().then((days) => {
-      if (!days?.length) return
-      setCells(realToIntensity(days))
-      setActiveCount(days.filter((d) => d.count > 0).length)
-      setLive(true)
-    }).catch(() => {})
+    let cancelled = false
+    const fetchHeatmap = () => {
+      sys.githubHeatmap().then((days) => {
+        if (cancelled || !days?.length) return
+        setCells(realToIntensity(days))
+        setActiveCount(days.filter((d) => d.count > 0).length)
+        setLive(true)
+      }).catch(() => {})
+    }
+    fetchHeatmap()
+
+    const onSettings = (e) => {
+      if (e.detail?.changed?.includes('github')) fetchHeatmap()
+    }
+    window.addEventListener('bento:settings-changed', onSettings)
+    return () => {
+      cancelled = true
+      window.removeEventListener('bento:settings-changed', onSettings)
+    }
   }, [])
 
   const total = live

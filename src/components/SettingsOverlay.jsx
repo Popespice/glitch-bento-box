@@ -62,6 +62,7 @@ export default function SettingsOverlay({ onClose }) {
   const handleSave = async () => {
     setSaving(true)
     try {
+      const changed = []
       if (resolvedCoords) {
         await sys.settingsSet('weather', {
           query:        locationQuery,
@@ -69,8 +70,15 @@ export default function SettingsOverlay({ onClose }) {
           lat:          resolvedCoords.lat,
           lon:          resolvedCoords.lon,
         })
+        changed.push('weather')
       }
       await sys.settingsSet('github', { username: githubUser.trim() })
+      changed.push('github')
+
+      // Tell the rest of the app to refetch immediately (the tiles' own
+      // intervals are 30 min / 1 hr, which is too slow to feel responsive).
+      window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed } }))
+
       setSaved(true)
       setTimeout(() => { setSaved(false); onClose() }, 800)
     } finally {
