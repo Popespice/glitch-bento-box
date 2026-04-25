@@ -11,7 +11,6 @@ import NowPlayingTile from './components/NowPlayingTile.jsx'
 import QuickSettingsTile from './components/QuickSettingsTile.jsx'
 import HeatmapTile from './components/HeatmapTile.jsx'
 import NextEventTile from './components/NextEventTile.jsx'
-
 export default function App() {
   const [theme, setTheme] = useState(() => {
     if (typeof window === 'undefined') return 'dark'

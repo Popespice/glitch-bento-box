@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { sys } from '../lib/sys.js'
 
 const WEEKS = 20
 const DAYS = 7
@@ -11,7 +12,7 @@ function seedRandom(seed) {
   }
 }
 
-function generate() {
+function generateFallback() {
   const rand = seedRandom(42)
   const cells = []
   for (let w = 0; w < WEEKS; w++) {
@@ -19,8 +20,19 @@ function generate() {
       const base = rand()
       const weekdayBias = d >= 1 && d <= 5 ? 1 : 0.35
       const recencyBias = 0.6 + (w / WEEKS) * 0.4
-      const intensity = Math.min(1, base * weekdayBias * recencyBias * 1.5)
-      cells.push(intensity)
+      cells.push(Math.min(1, base * weekdayBias * recencyBias * 1.5))
+    }
+  }
+  return cells
+}
+
+function realToIntensity(days) {
+  const max = Math.max(1, ...days.map((d) => d.count))
+  const cells = []
+  for (let w = 0; w < WEEKS; w++) {
+    for (let d = 0; d < DAYS; d++) {
+      const count = days[w * DAYS + d]?.count ?? 0
+      cells.push(count / max)
     }
   }
   return cells
@@ -29,26 +41,40 @@ function generate() {
 function cellStyle(intensity) {
   if (intensity < 0.08) return { background: 'var(--heatmap-empty)' }
   const warm = intensity > 0.55
-  const color = warm ? 'var(--heatmap-warm)' : 'var(--heatmap-cool)'
   return {
-    background: color,
+    background: warm ? 'var(--heatmap-warm)' : 'var(--heatmap-cool)',
     opacity: 0.35 + intensity * 0.65,
   }
 }
 
 export default function HeatmapTile() {
-  const cells = useMemo(generate, [])
-  const total = cells.reduce((sum, c) => sum + (c > 0.1 ? 1 : 0), 0)
+  const fallback = useMemo(generateFallback, [])
+  const [cells, setCells] = useState(fallback)
+  const [activeCount, setActiveCount] = useState(null)
+  const [live, setLive] = useState(false)
+
+  useEffect(() => {
+    sys.githubHeatmap().then((days) => {
+      if (!days?.length) return
+      setCells(realToIntensity(days))
+      setActiveCount(days.filter((d) => d.count > 0).length)
+      setLive(true)
+    }).catch(() => {})
+  }, [])
+
+  const total = live
+    ? activeCount
+    : cells.reduce((s, c) => s + (c > 0.1 ? 1 : 0), 0)
 
   return (
     <div className="tile heatmap-tile">
-      <span className="tile-label">GITHUB ACTIVITY</span>
+      <span className="tile-label">GITHUB ACTIVITY{live ? ' ●' : ''}</span>
       <div className="heatmap-grid">
         {cells.map((c, i) => (
           <div key={i} className="heatmap-cell" style={cellStyle(c)} />
         ))}
       </div>
-      <span className="tile-meta-line">{total} ACTIVE / {WEEKS * DAYS} DAYS</span>
+      <span className="tile-meta-line">{total ?? '—'} ACTIVE / {WEEKS * DAYS} DAYS</span>
     </div>
   )
 }

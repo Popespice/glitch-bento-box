@@ -9,6 +9,10 @@ function jitter(min, max) {
 
 const mocks = {
   platform: async () => ({ platform: 'mock', arch: 'mock', release: '' }),
+  githubHeatmap: async () => null, // renderer uses seeded random fallback
+  windowClose:    () => {},
+  windowMinimize: () => {},
+  windowMaximize: () => {},
   cpu: async () => ({
     percent: Math.round(jitter(15, 75)),
     cores: Array.from({ length: 8 }, () => Math.round(jitter(5, 90))),

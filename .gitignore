@@ -18,6 +18,9 @@ yarn-error.log*
 *.swp
 .DS_Store
 
+# claude local config
+.claude/
+
 # secrets / local
 .env
 .env.local

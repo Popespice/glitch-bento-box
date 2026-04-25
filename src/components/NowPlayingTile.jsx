@@ -37,7 +37,9 @@ export default function NowPlayingTile() {
       <span className="tile-label">NOW PLAYING</span>
       <div className="playing-main">
         <div className="playing-info">
-          <span className="playing-track">{track.name}</span>
+          <div className="playing-track-matrix">
+            <DotMatrix text={track.name} />
+          </div>
           <span className="playing-artist">{track.artist}</span>
         </div>
         <div className="waveform">
