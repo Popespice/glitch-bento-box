@@ -1,0 +1,780 @@
+/* ============================================================
+   RESET
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+/* ============================================================
+   THEME VARIABLES — dark is default
+   ============================================================ */
+:root {
+  --tile-bg: #0d0d0d;
+  --separator: #1c1c1c;
+  --text-primary: #e0e0e0;
+  --text-secondary: #484848;
+  --text-label: #2e2e2e;
+  --text-dim: #282828;
+  --bar-bg: #1a1a1a;
+  --bar-fill: #e0e0e0;
+  --dot-lit: rgba(224, 224, 224, 0.92);
+  --dot-dim: rgba(255, 255, 255, 0.05);
+  --accent: #e05a00;
+  --accent-dim: rgba(224, 90, 0, 0.25);
+  --toggle-bg: #1a1a1a;
+  --toggle-text: #484848;
+  --toggle-active-bg: #e0e0e0;
+  --toggle-active-text: #0d0d0d;
+  --seg-active: #3fdc6c;
+  --seg-inactive: #1a2e1f;
+  --ekg-stroke: #e0e0e0;
+  --heatmap-warm: #b08040;
+  --heatmap-cool: #3a7a6a;
+  --heatmap-empty: #161616;
+  --waveform-bar: rgba(30, 30, 30, 0.9);
+  --waveform-active: #0d0d0d;
+}
+
+.dashboard.light {
+  --tile-bg: #f8f8f8;
+  --separator: #e0e0e0;
+  --text-primary: #0d0d0d;
+  --text-secondary: #b0b0b0;
+  --text-label: #c8c8c8;
+  --text-dim: #d8d8d8;
+  --bar-bg: #ebebeb;
+  --bar-fill: #0d0d0d;
+  --dot-lit: rgba(13, 13, 13, 0.88);
+  --dot-dim: rgba(0, 0, 0, 0.07);
+  --accent: #e05a00;
+  --accent-dim: rgba(224, 90, 0, 0.18);
+  --toggle-bg: #ebebeb;
+  --toggle-text: #b0b0b0;
+  --toggle-active-bg: #0d0d0d;
+  --toggle-active-text: #f8f8f8;
+  --seg-active: #2db557;
+  --seg-inactive: #d8edd8;
+  --ekg-stroke: #0d0d0d;
+  --heatmap-warm: #c89040;
+  --heatmap-cool: #4a9a80;
+  --heatmap-empty: #e8e8e8;
+  --waveform-bar: rgba(220, 220, 220, 0.9);
+  --waveform-active: #f8f8f8;
+}
+
+/* ============================================================
+   DASHBOARD LAYOUT
+   ============================================================ */
+.dashboard {
+  position: relative;
+  display: grid;
+  grid-template-columns: 5fr 7fr;
+  grid-template-rows: 1fr;
+  width: 100vw;
+  height: 100vh;
+  background: var(--separator);
+  gap: 1px;
+  transition: background 0.35s ease;
+}
+
+.left-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 5fr 3fr 3fr;
+  background: var(--separator);
+  gap: 1px;
+  min-height: 0;
+  height: 100%;
+  transition: background 0.35s ease;
+}
+
+.right-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 2.5fr 3.2fr 2.2fr 3.5fr;
+  background: var(--separator);
+  gap: 1px;
+  min-height: 0;
+  height: 100%;
+  transition: background 0.35s ease;
+}
+
+/* ============================================================
+   TILE BASE
+   ============================================================ */
+.tile {
+  background: var(--tile-bg);
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  transition: background-color 0.35s ease, color 0.35s ease;
+}
+
+.tile-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.18em;
+  color: var(--text-label);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  transition: color 0.35s ease;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   CLOCK TILE
+   ============================================================ */
+.clock-tile {
+  grid-column: 1;
+  grid-row: 1;
+  padding: 18px 20px 14px;
+}
+
+.clock-display {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  padding: 6px 0 4px;
+}
+
+.clock-display svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.clock-display circle {
+  transition: fill 0.12s ease;
+}
+
+.clock-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.clock-day {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  transition: color 0.35s ease;
+}
+
+.clock-date {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--text-secondary);
+  transition: color 0.35s ease;
+}
+
+/* ============================================================
+   GLYPH TILE
+   ============================================================ */
+.glyph-tile {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.glyph-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.glyph-ring-container {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  opacity: 0.18;
+}
+
+.glyph-ring-container svg circle {
+  transition: stroke 0.35s ease;
+}
+
+.glyph-placeholder-text {
+  font-family: 'Space Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.22em;
+  color: var(--text-label);
+  text-align: center;
+  transition: color 0.35s ease;
+}
+
+/* ============================================================
+   WEATHER TILE
+   ============================================================ */
+.weather-tile {
+  padding: 16px 18px 14px;
+}
+
+.tile-value-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+
+.tile-value-matrix {
+  display: inline-flex;
+  align-items: flex-end;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.tile-value-matrix svg {
+  height: 100%;
+  width: auto;
+  display: block;
+}
+
+.tile-value-matrix.sm {
+  height: 28px;
+}
+
+.tile-value-matrix.md {
+  height: 30px;
+}
+
+.tile-value-matrix.lg {
+  height: 38px;
+}
+
+.tile-value-matrix.xs {
+  height: 11px;
+}
+
+.tile-value-unit {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-left: 0;
+  padding-bottom: 2px;
+  transition: color 0.35s ease;
+}
+
+.tile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
+}
+
+.tile-meta-line {
+  font-family: 'Space Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  transition: color 0.35s ease;
+}
+
+.tile-meta-name {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+  transition: color 0.35s ease;
+}
+
+/* ============================================================
+   BATTERY TILE
+   ============================================================ */
+.battery-tile {
+  padding: 16px 18px 14px;
+}
+
+.battery-segments {
+  display: flex;
+  gap: 2px;
+  margin: 6px 0 4px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.battery-seg {
+  height: 5px;
+  flex: 1;
+  transition: background-color 0.35s ease;
+}
+
+.battery-seg.active {
+  background: var(--seg-active);
+}
+
+.battery-seg.inactive {
+  background: var(--seg-inactive);
+}
+
+/* ============================================================
+   SYSTEM PULSE TILE
+   ============================================================ */
+.pulse-tile {
+  padding: 16px 18px 14px;
+}
+
+.pulse-value-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+
+.pulse-unit {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.1em;
+  padding-bottom: 3px;
+  transition: color 0.35s ease;
+}
+
+.ekg-wrapper {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ekg-wrapper svg {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 300%;
+  height: 100%;
+  animation: ekg-scroll 4s linear infinite;
+}
+
+.ekg-wrapper svg path {
+  transition: stroke 0.35s ease;
+}
+
+/* ============================================================
+   FREQUENCY TILE
+   ============================================================ */
+.freq-tile {
+  padding: 16px 18px 14px;
+}
+
+.freq-value-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+
+.freq-unit {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.1em;
+  padding-bottom: 3px;
+  transition: color 0.35s ease;
+}
+
+.freq-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 28px;
+  margin-bottom: 4px;
+}
+
+.freq-bar {
+  flex: 1;
+  transition: background-color 0.35s ease;
+}
+
+/* ============================================================
+   CPU TILE
+   ============================================================ */
+.cpu-tile {
+  padding: 16px 18px 14px;
+}
+
+.cpu-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+.cpu-value-block {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cpu-sparkline {
+  flex: 1;
+  min-width: 0;
+  height: 50px;
+}
+
+.cpu-sparkline polyline {
+  transition: stroke 0.35s ease;
+}
+
+.cpu-meta {
+  font-family: 'Space Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  transition: color 0.35s ease;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   MEMORY TILE
+   ============================================================ */
+.memory-tile {
+  padding: 16px 18px 14px;
+}
+
+.memory-sub {
+  font-family: 'Space Mono', monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  transition: color 0.35s ease;
+  flex-shrink: 0;
+}
+
+.mem-bar-track {
+  height: 4px;
+  background: var(--bar-bg);
+  margin-bottom: 4px;
+  flex-shrink: 0;
+  transition: background-color 0.35s ease;
+}
+
+.mem-bar-fill {
+  height: 100%;
+  background: var(--bar-fill);
+  transition: background-color 0.35s ease, width 0.6s ease;
+}
+
+.mem-swap {
+  font-family: 'Space Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin-top: auto;
+  transition: color 0.35s ease;
+}
+
+/* ============================================================
+   NOW PLAYING TILE
+   ============================================================ */
+.playing-tile {
+  grid-column: 1 / -1;
+  flex-direction: column;
+  padding: 16px 20px 14px;
+}
+
+.playing-main {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  flex: 1;
+  min-height: 0;
+}
+
+.playing-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.playing-track {
+  font-family: 'Space Mono', monospace;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+  transition: color 0.35s ease;
+}
+
+.playing-artist {
+  font-family: 'Space Mono', monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  color: var(--text-secondary);
+  transition: color 0.35s ease;
+}
+
+.waveform {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 44px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.waveform-bar {
+  flex: 1;
+  border-radius: 1px;
+  background: var(--waveform-bar);
+  transition: background-color 0.35s ease;
+  animation: wave-pulse var(--dur) ease-in-out infinite alternate;
+  transform-origin: center bottom;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+
+.progress-time {
+  display: inline-flex;
+  align-items: center;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.progress-time svg {
+  height: 100%;
+  width: auto;
+  display: block;
+}
+
+.progress-track {
+  flex: 1;
+  height: 3px;
+  background: var(--bar-bg);
+  position: relative;
+  overflow: visible;
+  transition: background-color 0.35s ease;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.5s linear;
+}
+
+/* ============================================================
+   QUICK SETTINGS TILE
+   ============================================================ */
+.settings-tile {
+  grid-column: 1 / -1;
+  padding: 14px 20px 12px;
+  justify-content: space-between;
+}
+
+.settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1;
+  justify-content: space-evenly;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--separator);
+  transition: border-color 0.35s ease;
+}
+
+.setting-row:last-child {
+  border-bottom: none;
+}
+
+.setting-name {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
+  transition: color 0.35s ease;
+}
+
+.setting-value {
+  font-family: 'Space Mono', monospace;
+  font-size: 8px;
+  color: var(--text-secondary);
+  letter-spacing: 0.1em;
+  transition: color 0.35s ease;
+}
+
+.setting-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toggle-switch {
+  width: 28px;
+  height: 14px;
+  background: var(--toggle-bg);
+  border-radius: 7px;
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.25s ease;
+  flex-shrink: 0;
+}
+
+.toggle-switch.on {
+  background: var(--toggle-active-bg);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #888;
+  transition: transform 0.25s ease, background-color 0.25s ease;
+}
+
+.toggle-switch.on .toggle-knob {
+  transform: translateX(14px);
+  background: var(--toggle-active-text);
+}
+
+/* ============================================================
+   HEATMAP TILE
+   ============================================================ */
+.heatmap-tile {
+  padding: 16px 18px 14px;
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(20, 1fr);
+  grid-template-rows: repeat(7, 14px);
+  grid-auto-flow: column;
+  gap: 3px;
+  margin: 8px 0 8px;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.heatmap-cell {
+  border-radius: 1px;
+  transition: background-color 0.35s ease;
+}
+
+/* ============================================================
+   NEXT EVENT TILE
+   ============================================================ */
+.event-tile {
+  padding: 16px 18px 14px;
+}
+
+.countdown-display {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+  gap: 10px;
+}
+
+.countdown-segment {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.countdown-unit {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+  padding-bottom: 2px;
+  transition: color 0.35s ease;
+}
+
+.event-name {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  transition: color 0.35s ease;
+  flex-shrink: 0;
+}
+
+.event-detail {
+  font-family: 'Space Mono', monospace;
+  font-size: 7.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  transition: color 0.35s ease;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   THEME TOGGLE BUTTON
+   ============================================================ */
+.theme-toggle {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  padding: 8px 14px;
+  background: var(--tile-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--separator);
+  cursor: pointer;
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+  z-index: 100;
+}
+
+.theme-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes ekg-scroll {
+  from { transform: translateY(-50%) translateX(0); }
+  to   { transform: translateY(-50%) translateX(-33.333%); }
+}
+
+@keyframes wave-pulse {
+  from { transform: scaleY(1); }
+  to   { transform: scaleY(0.2); }
+}
