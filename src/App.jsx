@@ -11,11 +11,14 @@ import NowPlayingTile from './components/NowPlayingTile.jsx'
 import QuickSettingsTile from './components/QuickSettingsTile.jsx'
 import HeatmapTile from './components/HeatmapTile.jsx'
 import NextEventTile from './components/NextEventTile.jsx'
+import SettingsOverlay from './components/SettingsOverlay.jsx'
+
 export default function App() {
   const [theme, setTheme] = useState(() => {
     if (typeof window === 'undefined') return 'dark'
     return localStorage.getItem('bento-theme') || 'dark'
   })
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     localStorage.setItem('bento-theme', theme)
@@ -41,9 +44,13 @@ export default function App() {
         <HeatmapTile />
         <NextEventTile />
       </div>
+      <button className="settings-btn" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+        ⚙ SET
+      </button>
       <button className="theme-toggle" onClick={toggle} aria-label="Toggle theme">
         {theme === 'dark' ? '◐ LIGHT' : '◑ DARK'}
       </button>
+      {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
     </div>
   )
 }

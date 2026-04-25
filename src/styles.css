@@ -772,6 +772,171 @@ html, body, #root {
 }
 
 /* ============================================================
+   SETTINGS BUTTON (bottom-left, mirrors theme-toggle)
+   ============================================================ */
+.settings-btn {
+  position: fixed;
+  bottom: 16px;
+  left: 20px;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 8px 14px;
+  background: var(--tile-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--separator);
+  cursor: pointer;
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+  z-index: 100;
+}
+
+.settings-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* ============================================================
+   SETTINGS OVERLAY
+   ============================================================ */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.dashboard.light .settings-overlay {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.settings-panel {
+  background: var(--tile-bg);
+  border: 1px solid var(--separator);
+  padding: 32px 36px 28px;
+  min-width: 380px;
+  max-width: 460px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-title {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  color: var(--text-primary);
+}
+
+.settings-close {
+  font-family: 'Space Mono', monospace;
+  font-size: 14px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.settings-close:hover {
+  color: var(--text-primary);
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--text-secondary);
+}
+
+.settings-input {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  background: var(--bar-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--separator);
+  padding: 10px 12px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.2s;
+}
+
+.settings-input:focus {
+  border-color: var(--text-secondary);
+}
+
+.settings-input::placeholder {
+  color: var(--text-label);
+}
+
+.settings-status {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.settings-status--ok {
+  color: var(--seg-active);
+}
+
+.settings-status--err {
+  color: var(--accent);
+}
+
+.settings-hint {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-label);
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-save {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  padding: 9px 22px;
+  background: var(--text-primary);
+  color: var(--tile-bg);
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.settings-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-save--done {
+  background: var(--seg-active);
+  opacity: 1 !important;
+}
+
+/* ============================================================
    ANIMATIONS
    ============================================================ */
 @keyframes ekg-scroll {

@@ -4,10 +4,25 @@ import { fileURLToPath } from 'node:url'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import si from 'systeminformation'
+import Store from 'electron-store'
 
 const execAsync = promisify(exec)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+const store = new Store({
+  defaults: {
+    weather: {
+      query: '',
+      locationName: '',
+      lat: null,
+      lon: null,
+    },
+    github: {
+      username: '',
+    },
+  },
+})
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
@@ -131,6 +146,101 @@ ipcMain.handle('sys:battery', async () => {
   }
 })
 
+// ---------- Weather (Open-Meteo, no API key) ----------
+
+const WMO_DESCRIPTIONS = {
+  0: 'CLEAR SKY', 1: 'MAINLY CLEAR', 2: 'PARTLY CLOUDY', 3: 'OVERCAST',
+  45: 'FOGGY', 48: 'FREEZING FOG',
+  51: 'LIGHT DRIZZLE', 53: 'DRIZZLE', 55: 'HEAVY DRIZZLE',
+  61: 'LIGHT RAIN', 63: 'RAIN', 65: 'HEAVY RAIN',
+  71: 'LIGHT SNOW', 73: 'SNOW', 75: 'HEAVY SNOW', 77: 'SNOW GRAINS',
+  80: 'RAIN SHOWERS', 81: 'RAIN SHOWERS', 82: 'VIOLENT SHOWERS',
+  85: 'SNOW SHOWERS', 86: 'HEAVY SNOW SHOWERS',
+  95: 'THUNDERSTORM', 96: 'THUNDERSTORM', 99: 'THUNDERSTORM',
+}
+
+function degreesToCardinal(deg) {
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW']
+  return dirs[Math.round(deg / 22.5) % 16]
+}
+
+let _weatherCache = null
+let _weatherFetchedAt = 0
+const WEATHER_TTL = 30 * 60 * 1000 // 30 min
+
+ipcMain.handle('sys:weather', async () => {
+  const lat = store.get('weather.lat')
+  const lon = store.get('weather.lon')
+  if (lat == null || lon == null) return null   // not configured yet
+
+  if (_weatherCache && Date.now() - _weatherFetchedAt < WEATHER_TTL) {
+    return _weatherCache
+  }
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast` +
+      `?latitude=${lat}&longitude=${lon}` +
+      `&current=temperature_2m,weathercode,windspeed_10m,winddirection_10m,relativehumidity_2m` +
+      `&temperature_unit=fahrenheit&windspeed_unit=mph&wind_speed_unit=mph`
+    const res = await fetch(url)
+    const json = await res.json()
+    const c = json.current
+    _weatherCache = {
+      tempF:       Math.round(c.temperature_2m),
+      condition:   WMO_DESCRIPTIONS[c.weathercode] ?? 'UNKNOWN',
+      humidity:    c.relativehumidity_2m,
+      windSpeed:   Math.round(c.windspeed_10m),
+      windDir:     degreesToCardinal(c.winddirection_10m),
+      locationName: store.get('weather.locationName') || '',
+    }
+    _weatherFetchedAt = Date.now()
+    return _weatherCache
+  } catch (err) {
+    console.error('[weather]', err.message)
+    return null
+  }
+})
+
+// ---------- Settings ----------
+
+ipcMain.handle('settings:get', () => ({
+  weather: store.get('weather'),
+  github:  store.get('github'),
+}))
+
+ipcMain.handle('settings:set', (_event, key, value) => {
+  store.set(key, value)
+  // Invalidate relevant caches so the next poll picks up new values
+  if (key.startsWith('weather')) {
+    _weatherCache    = null
+    _weatherFetchedAt = 0
+  }
+  if (key.startsWith('github')) {
+    _heatmapCache    = null
+    _heatmapFetchedAt = 0
+  }
+  return true
+})
+
+ipcMain.handle('settings:geocode', async (_event, query) => {
+  try {
+    const url = `https://geocoding-api.open-meteo.com/v1/search` +
+      `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
+    const res = await fetch(url)
+    const json = await res.json()
+    const r = json.results?.[0]
+    if (!r) return null
+    const parts = [r.name, r.admin1, r.country_code].filter(Boolean)
+    return {
+      lat:          r.latitude,
+      lon:          r.longitude,
+      locationName: parts.join(', '),
+    }
+  } catch (err) {
+    console.error('[geocode]', err.message)
+    return null
+  }
+})
+
 // ---------- GitHub contributions heatmap ----------
 
 let _heatmapCache = null
@@ -162,8 +272,14 @@ ipcMain.handle('sys:github-heatmap', async () => {
     const { stdout: tokenRaw } = await execAsync('gh auth token')
     const token = tokenRaw.trim()
 
-    const { stdout: userRaw } = await execAsync('gh api user -q .login')
-    const login = userRaw.trim()
+    const storedUsername = store.get('github.username')
+    let login
+    if (storedUsername) {
+      login = storedUsername
+    } else {
+      const { stdout: userRaw } = await execAsync('gh api user -q .login')
+      login = userRaw.trim()
+    }
 
     const res = await fetch('https://api.github.com/graphql', {
       method: 'POST',

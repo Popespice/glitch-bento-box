@@ -9,7 +9,14 @@ function jitter(min, max) {
 
 const mocks = {
   platform: async () => ({ platform: 'mock', arch: 'mock', release: '' }),
-  githubHeatmap: async () => null, // renderer uses seeded random fallback
+  githubHeatmap: async () => null,
+  weather: async () => ({
+    tempF: 58, condition: 'PARTLY CLOUDY', humidity: 64,
+    windSpeed: 7, windDir: 'NW',
+  }),
+  settingsGet:     async () => ({ weather: { query: '', locationName: '', lat: null, lon: null }, github: { username: '' } }),
+  settingsSet:     async () => true,
+  settingsGeocode: async (query) => ({ lat: 40.7128, lon: -74.0060, locationName: `${query} (mock)` }),
   windowClose:    () => {},
   windowMinimize: () => {},
   windowMaximize: () => {},
