@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 
 const BARS = 36
-const PROGRESS_DOTS = 36
+const PROGRESS_DOTS = 120
 
 function DotProgressBar({ pct }) {
   const filled = Math.round((pct / 100) * PROGRESS_DOTS)

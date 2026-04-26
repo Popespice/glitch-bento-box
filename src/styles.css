@@ -820,6 +820,17 @@ html, body, #root {
 }
 
 /* ============================================================
+   COLOR SWATCH TILE
+   ============================================================ */
+.color-swatch {
+  flex: 1;
+  min-height: 0;
+  cursor: pointer;
+  transition: background-color 0.8s ease;
+  margin: 6px 0 4px;
+}
+
+/* ============================================================
    SETTINGS BUTTON — bare gear icon, sits left of theme toggle
    ============================================================ */
 .settings-btn {

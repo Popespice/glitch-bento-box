@@ -1,46 +1,34 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
-import { sys } from '../lib/sys.js'
+
+function randomHex() {
+  return '#' + Math.floor(Math.random() * 0xFFFFFF)
+    .toString(16).padStart(6, '0').toUpperCase()
+}
 
 export default function GlyphTile() {
-  const [cmd, setCmd] = useState(null)
+  const [color, setColor] = useState(randomHex)
+  const refresh = useCallback(() => setColor(randomHex()), [])
 
   useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      try {
-        const result = await sys.lastCommand()
-        if (!cancelled) setCmd(result)
-      } catch { /* ignore */ }
-    }
-    tick()
-    const id = setInterval(tick, 5000)
-    return () => { cancelled = true; clearInterval(id) }
-  }, [])
-
-  const full = cmd?.full ?? ''
-  const truncated = full.length > 48 ? full.slice(0, 47) + '…' : full
+    const id = setInterval(refresh, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [refresh])
 
   return (
     <div className="tile glyph-tile">
-      <span className="tile-label">LAST CMD</span>
-      {cmd ? (
-        <>
-          <div className="tile-value-row">
-            <div className="tile-value-matrix">
-              <DotMatrix text={cmd.verb} />
-            </div>
-          </div>
-          <div className="tile-meta">
-            <span className="tile-meta-line last-cmd-full">{truncated}</span>
-            <span className="tile-meta-line">{cmd.shell}</span>
-          </div>
-        </>
-      ) : (
-        <div className="tile-meta">
-          <span className="tile-meta-line" style={{ color: 'var(--text-secondary)' }}>NO HISTORY FOUND</span>
+      <span className="tile-label">COLOR</span>
+      <div
+        className="color-swatch"
+        style={{ backgroundColor: color }}
+        onClick={refresh}
+        title="Click to refresh"
+      />
+      <div className="tile-meta">
+        <div className="tile-value-matrix xs">
+          <DotMatrix text={color.slice(1)} />
         </div>
-      )}
+      </div>
     </div>
   )
 }
