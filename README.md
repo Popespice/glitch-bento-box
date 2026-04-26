@@ -103,10 +103,26 @@ Opens Electron with hot-reload. The UI is also visible at `http://localhost:5173
 ### Production build
 
 ```bash
-npm run dist:mac   # → release/*.dmg
-npm run dist:win   # → release/*.exe
+npm run dist:mac   # → release/*.dmg  (arm64 + x64)
+npm run dist:win   # → release/*.exe  (NSIS installer)
 npm run dist       # both
 ```
+
+A first run downloads ~200 MB of Electron binaries from GitHub; subsequent builds reuse the cache. Output lands in `release/`:
+
+```
+release/
+  Bento-0.0.1-arm64.dmg     # Apple Silicon
+  Bento-0.0.1.dmg           # Intel
+  mac-arm64/Bento.app       # unpacked .app for direct testing
+  mac/Bento.app
+```
+
+**First launch on macOS.** The DMGs are signed with a local ad-hoc identity, not notarized. Gatekeeper will block the first launch — right-click the app and choose **Open**, then confirm in the dialog. After the first run macOS remembers the choice.
+
+**Native Bluetooth permission.** When the user toggles Bluetooth for the first time, the app compiles `bt-helper.app` into the user-data directory and macOS prompts for Bluetooth access (see [Bluetooth toggle](#bluetooth-toggle) below).
+
+**Notarization (optional).** To distribute publicly without the right-click-to-open step, sign and notarize with an Apple Developer ID by setting `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` in your environment before running `npm run dist:mac`. See the [electron-builder docs](https://www.electron.build/code-signing) for details.
 
 ---
 
