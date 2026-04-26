@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
+import { usePolling } from '../lib/usePolling.js'
 
 const DISK_SEGS = 20
 
@@ -30,25 +31,15 @@ export default function GlyphTile() {
   const tickRef  = useRef(null)
   const doneRef  = useRef(null)
 
-  // Uptime — update every 60s
-  useEffect(() => {
-    const fetch = async () => {
-      try { const t = await sys.uptime(); if (t) setUptime(t.uptime) } catch {}
-    }
-    fetch()
-    const id = setInterval(fetch, 60_000)
-    return () => clearInterval(id)
-  }, [])
+  // Uptime — update every 60s, paused when window hidden
+  usePolling(async () => {
+    try { const t = await sys.uptime(); if (t) setUptime(t.uptime) } catch {}
+  }, 60_000)
 
-  // Disk — update every 30s
-  useEffect(() => {
-    const fetch = async () => {
-      try { const d = await sys.disk(); if (d) setDisk(d) } catch {}
-    }
-    fetch()
-    const id = setInterval(fetch, 30_000)
-    return () => clearInterval(id)
-  }, [])
+  // Disk — update every 30s, paused when window hidden
+  usePolling(async () => {
+    try { const d = await sys.disk(); if (d) setDisk(d) } catch {}
+  }, 30_000)
 
   // Load saved pomodoro duration on mount
   useEffect(() => {

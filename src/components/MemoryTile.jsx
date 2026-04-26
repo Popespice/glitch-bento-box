@@ -1,27 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
+import { usePolling } from '../lib/usePolling.js'
 
 export default function MemoryTile() {
   const [m, setM] = useState({ totalGB: 0, usedGB: 0, swapGB: 0, pct: 0 })
 
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      try {
-        const next = await sys.memory()
-        if (!cancelled) setM(next)
-      } catch {
-        /* ignore */
-      }
-    }
-    tick()
-    const id = setInterval(tick, 2500)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+  usePolling(async () => {
+    try {
+      const next = await sys.memory()
+      setM(next)
+    } catch { /* ignore */ }
+  }, 5000)
 
   return (
     <div className="tile memory-tile">

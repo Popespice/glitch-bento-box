@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
+import { usePolling } from '../lib/usePolling.js'
 
 function getTarget() {
   const t = new Date()
@@ -11,10 +12,7 @@ export default function NextEventTile() {
   const [target] = useState(getTarget)
   const [now, setNow] = useState(Date.now())
 
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
+  usePolling(() => setNow(Date.now()), 1000)
 
   const remaining = Math.max(0, Math.floor((target.getTime() - now) / 1000))
   const hrs = Math.floor(remaining / 3600)

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
+import { usePolling } from '../lib/usePolling.js'
 
 function ecgValue(phase) {
   const p = ((phase % 1) + 1) % 1
@@ -22,23 +23,12 @@ export default function SystemPulseTile() {
   const cpuRef = useRef(cpu)
   cpuRef.current = cpu
 
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      try {
-        const c = await sys.cpu()
-        if (!cancelled) setCpu(c.percent)
-      } catch {
-        /* ignore */
-      }
-    }
-    tick()
-    const id = setInterval(tick, 1500)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+  usePolling(async () => {
+    try {
+      const c = await sys.cpu()
+      setCpu(c.percent)
+    } catch { /* ignore */ }
+  }, 2000)
 
   useEffect(() => {
     const canvas = canvasRef.current

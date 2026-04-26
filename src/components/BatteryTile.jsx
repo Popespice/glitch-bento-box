@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys, isReal } from '../lib/sys.js'
+import { usePolling } from '../lib/usePolling.js'
 
 const SEGMENTS = 28
 
@@ -16,27 +17,15 @@ export default function BatteryTile() {
   const [hasBattery,    setHasBattery]    = useState(true)
   const [timeRemaining, setTimeRemaining] = useState(-1)
 
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      try {
-        const b = await sys.battery()
-        if (cancelled) return
-        setHasBattery(b.hasBattery)
-        setLevel(b.percent ?? 0)
-        setCharging(b.isCharging || b.acConnected)
-        setTimeRemaining(b.timeRemaining ?? -1)
-      } catch {
-        /* ignore */
-      }
-    }
-    tick()
-    const id = setInterval(tick, 5000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+  usePolling(async () => {
+    try {
+      const b = await sys.battery()
+      setHasBattery(b.hasBattery)
+      setLevel(b.percent ?? 0)
+      setCharging(b.isCharging || b.acConnected)
+      setTimeRemaining(b.timeRemaining ?? -1)
+    } catch { /* ignore */ }
+  }, 30000)
 
   const activeSegs = Math.round((level / 100) * SEGMENTS)
   const sourceLabel = isReal ? 'SYSTEM POWER' : 'MOCK DATA'

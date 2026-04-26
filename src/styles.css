@@ -1053,6 +1053,14 @@ html, body, #root {
 /* ============================================================
    ANIMATIONS
    ============================================================ */
+/* Pause every animation when the window is hidden / occluded — App.jsx
+   toggles the .window-hidden class on <html> via the Page Visibility API */
+html.window-hidden *,
+html.window-hidden *::before,
+html.window-hidden *::after {
+  animation-play-state: paused !important;
+}
+
 @keyframes ekg-scroll {
   from { transform: translateY(-50%) translateX(0); }
   to   { transform: translateY(-50%) translateX(-33.333%); }

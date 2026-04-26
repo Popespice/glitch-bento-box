@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
+import { usePolling } from '../lib/usePolling.js'
 
 const HISTORY = 32
 
@@ -9,26 +10,14 @@ export default function CPUTile() {
   const [meta, setMeta] = useState({ speedGhz: 0, brand: '' })
   const [history, setHistory] = useState(() => Array(HISTORY).fill(0))
 
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      try {
-        const { percent, speedGhz, brand } = await sys.cpu()
-        if (cancelled) return
-        setCpu(percent)
-        setMeta({ speedGhz, brand })
-        setHistory((prev) => [...prev.slice(1), percent])
-      } catch {
-        /* ignore */
-      }
-    }
-    tick()
-    const id = setInterval(tick, 1500)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+  usePolling(async () => {
+    try {
+      const { percent, speedGhz, brand } = await sys.cpu()
+      setCpu(percent)
+      setMeta({ speedGhz, brand })
+      setHistory((prev) => [...prev.slice(1), percent])
+    } catch { /* ignore */ }
+  }, 2000)
 
   const points = history
     .map((v, i) => {

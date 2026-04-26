@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
+import { usePolling } from '../lib/usePolling.js'
 
 function formatSpeed(bps) {
   if (bps >= 1_000_000) return { value: (bps / 1_000_000).toFixed(1), unit: 'MB/S' }
@@ -22,38 +23,26 @@ export default function NetworkTile() {
   const peakRef = useRef([])
   const [peakDown, setPeakDown] = useState(0)
 
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      try {
-        const n = await sys.network()
-        if (cancelled) return
-        setDown(n.down)
-        setUp(n.up)
-        setIface(n.iface)
-        setSsid(n.ssid ?? null)
-        setIp(n.ip ?? null)
-        setType(n.type ?? 'wired')
+  usePolling(async () => {
+    try {
+      const n = await sys.network()
+      setDown(n.down)
+      setUp(n.up)
+      setIface(n.iface)
+      setSsid(n.ssid ?? null)
+      setIp(n.ip ?? null)
+      setType(n.type ?? 'wired')
 
-        peakRef.current = [...peakRef.current.slice(-(PEAK_WINDOW - 1)), n.down]
-        setPeakDown(Math.max(...peakRef.current))
+      peakRef.current = [...peakRef.current.slice(-(PEAK_WINDOW - 1)), n.down]
+      setPeakDown(Math.max(...peakRef.current))
 
-        // History intensity normalized to 0..1 against the rolling peak so the
-        // bar chart stays alive instead of pinning to 0 when peak is high.
-        const peak = Math.max(...peakRef.current, 1)
-        const intensity = Math.max(0.06, Math.min(1, n.down / peak))
-        setHistory((prev) => [...prev.slice(1), intensity])
-      } catch {
-        /* ignore */
-      }
-    }
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+      // History intensity normalized to 0..1 against the rolling peak so the
+      // bar chart stays alive instead of pinning to 0 when peak is high.
+      const peak = Math.max(...peakRef.current, 1)
+      const intensity = Math.max(0.06, Math.min(1, n.down / peak))
+      setHistory((prev) => [...prev.slice(1), intensity])
+    } catch { /* ignore */ }
+  }, 2000)
 
   const downFmt = formatSpeed(down)
   const peakFmt = formatSpeed(peakDown)

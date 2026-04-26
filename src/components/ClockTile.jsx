@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
+import { usePolling } from '../lib/usePolling.js'
 
 const pad = (n) => String(n).padStart(2, '0')
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
@@ -16,11 +17,7 @@ function formatDate(d) {
 export default function ClockTile() {
   const [now, setNow] = useState(new Date())
 
-  useEffect(() => {
-    const tick = () => setNow(new Date())
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [])
+  usePolling(() => setNow(new Date()), 1000)
 
   return (
     <div className="tile clock-tile">

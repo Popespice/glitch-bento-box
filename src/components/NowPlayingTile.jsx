@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
+import { usePolling } from '../lib/usePolling.js'
 
 const BARS = 36
 const PROGRESS_DOTS = 120
@@ -25,12 +26,7 @@ export default function NowPlayingTile() {
   const track = { name: 'Nightcall', artist: 'KAVINSKY / OUTRUN', duration: 287 }
   const [position, setPosition] = useState(236)
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      setPosition((p) => (p + 1) % track.duration)
-    }, 1000)
-    return () => clearInterval(id)
-  }, [track.duration])
+  usePolling(() => setPosition((p) => (p + 1) % track.duration), 1000)
 
   const bars = useMemo(
     () =>

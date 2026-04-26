@@ -24,6 +24,16 @@ export default function App() {
     localStorage.setItem('bento-theme', theme)
   }, [theme])
 
+  // Pause CSS animations when window is hidden — saves significant GPU work
+  useEffect(() => {
+    const onVis = () => {
+      document.documentElement.classList.toggle('window-hidden', document.hidden)
+    }
+    onVis()
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [])
+
   const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
 
   return (
