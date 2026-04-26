@@ -793,12 +793,13 @@ html, body, #root {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 3px;
+  justify-content: space-between;
   height: 7px;
 }
 .progress-dot {
-  flex: 1;
-  height: 7px;
+  width: 3px;
+  height: 3px;
+  flex: 0 0 auto;
   border-radius: 50%;
   background: var(--bar-bg);
   transition: background-color 0.4s ease;
