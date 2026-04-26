@@ -323,6 +323,17 @@ html, body, #root {
   background: var(--seg-inactive);
 }
 
+.battery-time-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.battery-time-matrix {
+  height: 22px;
+}
+
 /* ============================================================
    SYSTEM PULSE TILE
    ============================================================ */

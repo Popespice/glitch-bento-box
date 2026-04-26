@@ -59,15 +59,18 @@ export default function BatteryTile() {
           />
         ))}
       </div>
+      {!charging && timeRemaining > 0 && (
+        <div className="battery-time-row">
+          <div className="tile-value-matrix battery-time-matrix">
+            <DotMatrix text={fmtTimeRemaining(timeRemaining)} />
+          </div>
+          <span className="tile-value-unit">LEFT</span>
+        </div>
+      )}
       <div className="tile-meta">
         <span className="tile-meta-line">
           {sourceLabel} / {stateLabel}
         </span>
-        {!charging && timeRemaining > 0 && (
-          <span className="tile-meta-line">
-            {fmtTimeRemaining(timeRemaining)} REMAINING
-          </span>
-        )}
       </div>
     </div>
   )
