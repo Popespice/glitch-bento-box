@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { exec } from 'node:child_process'
+import { exec, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -70,10 +70,12 @@ const store = new Store({
 })
 
 // In-memory only — never persisted, dies when the process exits.
-let _spotifyAccess     = null   // { token: string, expiresAt: number (ms epoch) }
-let _pendingConnect    = null   // { resolve, reject, state, timeoutId } during Spotify OAuth flow
-let _googleAccess      = null   // { token: string, expiresAt: number }
-let _pendingGCalConnect = null  // { resolve, reject, state, timeoutId } during Google OAuth flow
+let _spotifyAccess      = null   // { token: string, expiresAt: number (ms epoch) }
+let _pendingConnect     = null   // { resolve, reject, state, timeoutId } during Spotify OAuth flow
+let _googleAccess       = null   // { token: string, expiresAt: number }
+let _pendingGCalConnect = null   // { resolve, reject, state, timeoutId } during Google OAuth flow
+let _caffeinateProc     = null   // ChildProcess | null — caffeinate -d background process
+let _btHelperPath       = null   // string | null — path to compiled Swift BT helper binary
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
@@ -118,6 +120,14 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// Ensure caffeinate is killed when the app exits so the Mac can sleep normally.
+app.on('before-quit', () => {
+  if (_caffeinateProc && !_caffeinateProc.killed) {
+    _caffeinateProc.kill()
+    _caffeinateProc = null
+  }
 })
 
 // ---------- bento:// protocol routing ----------
@@ -1140,4 +1150,144 @@ ipcMain.handle('sys:calendar-next-event', async () => {
     start:        next.start,
     calendarName: next.calendarName,
   }
+})
+
+// ============================================================
+//  QUICK SETTINGS — WiFi, Bluetooth, Caffeinate, Focus
+// ============================================================
+
+// ---------- WiFi ----------
+
+ipcMain.handle('sys:wifi-status', async () => {
+  try {
+    const { stdout } = await execAsync('networksetup -getairportpower en0', { timeout: 3000 })
+    const on = stdout.includes(': On')
+    let ssid = ''
+    if (on) {
+      const conns = await si.wifiConnections().catch(() => [])
+      ssid = conns[0]?.ssid || ''
+    }
+    return { on, ssid }
+  } catch (err) {
+    console.error('[wifi-status]', err?.message)
+    return { on: false, ssid: '' }
+  }
+})
+
+ipcMain.handle('sys:wifi-toggle', async (_event, on) => {
+  const subcmd = `networksetup -setairportpower en0 ${on ? 'on' : 'off'}`
+  try {
+    await execAsync(
+      `osascript -e 'do shell script "${subcmd}" with administrator privileges'`,
+      { timeout: 30000 },
+    )
+    return { ok: true }
+  } catch (err) {
+    console.error('[wifi-toggle]', err?.message)
+    return { ok: false, error: err?.message || 'Toggle failed' }
+  }
+})
+
+// ---------- Bluetooth ----------
+
+// Swift source for the compiled BT helper.
+const BT_SWIFT_SOURCE = `import IOBluetooth
+let cmd = CommandLine.arguments.dropFirst().first ?? "status"
+if cmd == "status" {
+    print(IOBluetoothPreferenceGetControllerPowerState() == 1 ? "on" : "off")
+} else if cmd == "on" {
+    IOBluetoothPreferenceSetControllerPowerState(1)
+} else if cmd == "off" {
+    IOBluetoothPreferenceSetControllerPowerState(0)
+}
+`
+
+// Lazily compile the BT helper once; cache the binary path.
+async function getBTHelper() {
+  if (_btHelperPath) return _btHelperPath
+  const dir = app.getPath('userData')
+  const out  = path.join(dir, 'bt-helper')
+  const src  = path.join(dir, 'bt-helper.swift')
+  // Return existing binary immediately if already compiled.
+  try { await fs.promises.access(out); _btHelperPath = out; return out } catch {}
+  // Write source and compile (takes ~3-5s, happens once).
+  await fs.promises.writeFile(src, BT_SWIFT_SOURCE)
+  await execAsync(`swiftc "${src}" -o "${out}"`, { timeout: 60000 })
+  _btHelperPath = out
+  return out
+}
+
+ipcMain.handle('sys:bluetooth-status', async () => {
+  try {
+    const helper = await getBTHelper()
+    const { stdout } = await execAsync(`"${helper}" status`, { timeout: 3000 })
+    return { on: stdout.trim() === 'on', available: true }
+  } catch {
+    // Fallback: system_profiler (slow but always works)
+    try {
+      const { stdout } = await execAsync('system_profiler SPBluetoothDataType', { timeout: 8000 })
+      return { on: stdout.includes('State: On'), available: false }
+    } catch (err) {
+      console.error('[bluetooth-status]', err?.message)
+      return { on: false, available: false }
+    }
+  }
+})
+
+ipcMain.handle('sys:bluetooth-toggle', async (_event, on) => {
+  try {
+    const helper = await getBTHelper()
+    await execAsync(`"${helper}" ${on ? 'on' : 'off'}`, { timeout: 5000 })
+    return { ok: true }
+  } catch (err) {
+    console.error('[bluetooth-toggle]', err?.message)
+    return { ok: false, error: err?.message || 'Toggle failed' }
+  }
+})
+
+// ---------- Caffeinate ----------
+
+ipcMain.handle('sys:caffeinate-status', async () => {
+  // Check our own process first (fastest path).
+  if (_caffeinateProc && !_caffeinateProc.killed) return { on: true }
+  // Also catch stray caffeinate processes from before the app started.
+  try {
+    await execAsync('pgrep -x caffeinate', { timeout: 2000 })
+    return { on: true }
+  } catch {
+    return { on: false }
+  }
+})
+
+ipcMain.handle('sys:caffeinate-toggle', async (_event, on) => {
+  if (on) {
+    if (_caffeinateProc && !_caffeinateProc.killed) return { ok: true }
+    _caffeinateProc = spawn('caffeinate', ['-d'], { detached: false })
+    _caffeinateProc.on('exit', () => { _caffeinateProc = null })
+  } else {
+    if (_caffeinateProc) {
+      _caffeinateProc.kill()
+      _caffeinateProc = null
+    }
+    // Kill any stray system-level caffeinate processes too.
+    await execAsync('pgrep -x caffeinate | xargs kill 2>/dev/null || true', { timeout: 2000 }).catch(() => {})
+  }
+  return { ok: true }
+})
+
+// ---------- Focus ----------
+
+ipcMain.handle('sys:focus-set', async (_event, shortcutName) => {
+  // null shortcutName = deactivate (no standard shortcut for this, so just clear locally)
+  if (!shortcutName) return { ok: true }
+  try {
+    await execAsync(`/usr/bin/shortcuts run "${shortcutName}"`, { timeout: 15000 })
+    return { ok: true }
+  } catch {
+    return { ok: false, notConfigured: true }
+  }
+})
+
+ipcMain.handle('sys:open-shortcuts', async () => {
+  await execAsync('open -a Shortcuts').catch(() => {})
 })

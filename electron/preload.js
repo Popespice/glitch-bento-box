@@ -29,6 +29,16 @@ contextBridge.exposeInMainWorld('bento', {
   calendarDisconnect:    ()      => ipcRenderer.invoke('calendar:disconnect'),
   calendarNextEvent:     ()      => ipcRenderer.invoke('sys:calendar-next-event'),
 
+  // Quick settings — WiFi, Bluetooth, Caffeinate, Focus
+  wifiStatus:        ()      => ipcRenderer.invoke('sys:wifi-status'),
+  wifiToggle:        (on)    => ipcRenderer.invoke('sys:wifi-toggle', on),
+  bluetoothStatus:   ()      => ipcRenderer.invoke('sys:bluetooth-status'),
+  bluetoothToggle:   (on)    => ipcRenderer.invoke('sys:bluetooth-toggle', on),
+  caffeinateStatus:  ()      => ipcRenderer.invoke('sys:caffeinate-status'),
+  caffeinateToggle:  (on)    => ipcRenderer.invoke('sys:caffeinate-toggle', on),
+  focusSet:          (name)  => ipcRenderer.invoke('sys:focus-set', name),
+  openShortcutsApp:  ()      => ipcRenderer.invoke('sys:open-shortcuts'),
+
   // Settings
   settingsGet:     ()          => ipcRenderer.invoke('settings:get'),
   settingsSet:     (key, val)  => ipcRenderer.invoke('settings:set', key, val),
