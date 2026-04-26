@@ -1189,41 +1189,110 @@ ipcMain.handle('sys:wifi-toggle', async (_event, on) => {
 })
 
 // ---------- Bluetooth ----------
+// Modern macOS (Sonoma+) requires NSBluetoothAlwaysUsageDescription in the
+// caller's Info.plist; TCC kills bare binaries that touch IOBluetooth even
+// for power-state reads. We therefore package the helper as a tiny .app
+// bundle and launch it via Launch Services (`open -W`) so TCC reads the
+// bundle's Info.plist. Status results round-trip through a temp file since
+// `open -W` doesn't pipe stdout back.
 
-// Swift source for the compiled BT helper.
 const BT_SWIFT_SOURCE = `import IOBluetooth
-let cmd = CommandLine.arguments.dropFirst().first ?? "status"
-if cmd == "status" {
-    print(IOBluetoothPreferenceGetControllerPowerState() == 1 ? "on" : "off")
-} else if cmd == "on" {
-    IOBluetoothPreferenceSetControllerPowerState(1)
-} else if cmd == "off" {
-    IOBluetoothPreferenceSetControllerPowerState(0)
+import Foundation
+
+@_silgen_name("IOBluetoothPreferenceGetControllerPowerState")
+func _btGet() -> Int32
+
+@_silgen_name("IOBluetoothPreferenceSetControllerPowerState")
+func _btSet(_ state: Int32)
+
+let args = CommandLine.arguments
+let cmd = args.dropFirst().first ?? "status"
+let outPath = args.dropFirst(2).first ?? "/tmp/bento-bt-result"
+
+switch cmd {
+case "status":
+  break
+case "on":
+  _btSet(1)
+case "off":
+  _btSet(0)
+default:
+  exit(2)
 }
+
+let final = _btGet() == 1 ? "on" : "off"
+try? final.write(toFile: outPath, atomically: true, encoding: .utf8)
 `
 
-// Lazily compile the BT helper once; cache the binary path.
+const BT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.glitch.bento.bt-helper</string>
+  <key>CFBundleExecutable</key>
+  <string>bt-helper</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Glitch Bento Box toggles your Mac's Bluetooth controller from the Quick Settings tile.</string>
+</dict>
+</plist>
+`
+
+// Lazily build the BT helper bundle once; cache the bundle path.
 async function getBTHelper() {
   if (_btHelperPath) return _btHelperPath
   const dir = app.getPath('userData')
-  const out  = path.join(dir, 'bt-helper')
-  const src  = path.join(dir, 'bt-helper.swift')
-  // Return existing binary immediately if already compiled.
-  try { await fs.promises.access(out); _btHelperPath = out; return out } catch {}
-  // Write source and compile (takes ~3-5s, happens once).
+  const bundle  = path.join(dir, 'bt-helper.app')
+  const macos   = path.join(bundle, 'Contents', 'MacOS')
+  const binary  = path.join(macos, 'bt-helper')
+  const plist   = path.join(bundle, 'Contents', 'Info.plist')
+  const src     = path.join(dir, 'bt-helper.swift')
+
+  // Reuse existing bundle if both binary and plist already exist (skip recompile).
+  try {
+    await fs.promises.access(binary)
+    await fs.promises.access(plist)
+    _btHelperPath = bundle
+    return bundle
+  } catch {}
+
+  // Build the .app bundle structure.
+  await fs.promises.mkdir(macos, { recursive: true })
+  await fs.promises.writeFile(plist, BT_INFO_PLIST)
   await fs.promises.writeFile(src, BT_SWIFT_SOURCE)
-  await execAsync(`swiftc "${src}" -o "${out}"`, { timeout: 60000 })
-  _btHelperPath = out
-  return out
+  await execAsync(`swiftc "${src}" -o "${binary}"`, { timeout: 60000 })
+  // Ad-hoc sign so Launch Services treats the bundle as a real app.
+  await execAsync(`codesign --force --sign - "${bundle}"`, { timeout: 10000 })
+
+  _btHelperPath = bundle
+  return bundle
+}
+
+// Run the helper via Launch Services; return the resulting state from the temp file.
+async function runBTHelper(cmd) {
+  const bundle = await getBTHelper()
+  const resultPath = path.join(app.getPath('userData'), 'bt-result.txt')
+  // Wipe any stale result so we never accept old data.
+  await fs.promises.rm(resultPath, { force: true }).catch(() => {})
+  await execAsync(
+    `open -W "${bundle}" --args ${cmd} "${resultPath}"`,
+    { timeout: 10000 },
+  )
+  const out = await fs.promises.readFile(resultPath, 'utf8').catch(() => '')
+  return out.trim()
 }
 
 ipcMain.handle('sys:bluetooth-status', async () => {
   try {
-    const helper = await getBTHelper()
-    const { stdout } = await execAsync(`"${helper}" status`, { timeout: 3000 })
-    return { on: stdout.trim() === 'on', available: true }
+    const out = await runBTHelper('status')
+    if (out === 'on' || out === 'off') return { on: out === 'on', available: true }
+    throw new Error('helper returned no result')
   } catch {
-    // Fallback: system_profiler (slow but always works)
+    // Fallback: system_profiler — slow but always works without TCC.
     try {
       const { stdout } = await execAsync('system_profiler SPBluetoothDataType', { timeout: 8000 })
       return { on: stdout.includes('State: On'), available: false }
@@ -1236,8 +1305,7 @@ ipcMain.handle('sys:bluetooth-status', async () => {
 
 ipcMain.handle('sys:bluetooth-toggle', async (_event, on) => {
   try {
-    const helper = await getBTHelper()
-    await execAsync(`"${helper}" ${on ? 'on' : 'off'}`, { timeout: 5000 })
+    await runBTHelper(on ? 'on' : 'off')
     return { ok: true }
   } catch (err) {
     console.error('[bluetooth-toggle]', err?.message)
