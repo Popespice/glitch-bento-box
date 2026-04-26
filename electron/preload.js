@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('bento', {
   uptime:         () => ipcRenderer.invoke('sys:uptime'),
   disk:           () => ipcRenderer.invoke('sys:disk'),
   playSound:      (sound) => ipcRenderer.invoke('sys:play-sound', sound),
+  nowPlaying:     () => ipcRenderer.invoke('sys:now-playing'),
+
+  // Spotify OAuth
+  spotifyConnect:    () => ipcRenderer.invoke('spotify:connect'),
+  spotifyDisconnect: () => ipcRenderer.invoke('spotify:disconnect'),
 
   // Settings
   settingsGet:     ()          => ipcRenderer.invoke('settings:get'),

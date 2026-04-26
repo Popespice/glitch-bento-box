@@ -11,7 +11,17 @@ export default function SettingsOverlay({ onClose }) {
   const [saved,         setSaved]           = useState(false)
   const [geocoding,     setGeocoding]       = useState(false)
 
+  // Spotify state — credentials are bundled, so this is just connect/disconnect.
+  const [spotifyConnected,  setSpotifyConnected]  = useState(false)
+  const [spotifyConnecting, setSpotifyConnecting] = useState(false)
+  const [spotifyError,      setSpotifyError]      = useState('')
+
   const overlayRef = useRef(null)
+
+  const refreshSpotifyStatus = async () => {
+    const s = await sys.settingsGet()
+    setSpotifyConnected(!!s?.spotify?.connected)
+  }
 
   // Load existing settings on mount
   useEffect(() => {
@@ -20,6 +30,7 @@ export default function SettingsOverlay({ onClose }) {
       if (s?.weather?.locationName) setLocationName(s.weather.locationName)
       if (s?.weather?.lat != null)  setResolvedCoords({ lat: s.weather.lat, lon: s.weather.lon })
       if (s?.github?.username)      setGithubUser(s.github.username)
+      setSpotifyConnected(!!s?.spotify?.connected)
     })
   }, [])
 
@@ -58,6 +69,32 @@ export default function SettingsOverlay({ onClose }) {
 
   const handleLocationBlur = () => geocode(locationQuery)
   const handleLocationKey  = (e) => { if (e.key === 'Enter') geocode(locationQuery) }
+
+  const handleSpotifyConnect = async () => {
+    setSpotifyConnecting(true)
+    setSpotifyError('')
+    try {
+      const result = await sys.spotifyConnect()
+      if (result?.ok) {
+        await refreshSpotifyStatus()
+        window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } }))
+      } else {
+        setSpotifyError(result?.error || 'Connect failed')
+      }
+    } catch (err) {
+      setSpotifyError(err?.message || 'Connect failed')
+    } finally {
+      setSpotifyConnecting(false)
+    }
+  }
+
+  const handleSpotifyDisconnect = async () => {
+    if (!window.confirm('Disconnect Spotify? Your refresh token will be wiped from local storage.')) return
+    await sys.spotifyDisconnect()
+    await refreshSpotifyStatus()
+    setSpotifyError('')
+    window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } }))
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -128,6 +165,45 @@ export default function SettingsOverlay({ onClose }) {
             spellCheck={false}
           />
           <span className="settings-hint">Used for the contributions heatmap</span>
+        </div>
+
+        <div className="settings-section">
+          <label className="settings-label">SPOTIFY</label>
+          <div className="settings-spotify-row">
+            {spotifyConnected ? (
+              <>
+                <span className="settings-status settings-status--ok">✓ CONNECTED</span>
+                <button
+                  className="settings-button settings-button--ghost"
+                  onClick={handleSpotifyDisconnect}
+                >
+                  DISCONNECT
+                </button>
+              </>
+            ) : (
+              <>
+                {spotifyConnecting && (
+                  <span className="settings-status">WAITING FOR BROWSER…</span>
+                )}
+                {!spotifyConnecting && spotifyError && (
+                  <span className="settings-status settings-status--err">{spotifyError}</span>
+                )}
+                {!spotifyConnecting && !spotifyError && (
+                  <span className="settings-status">NOT CONNECTED</span>
+                )}
+                <button
+                  className="settings-button"
+                  onClick={handleSpotifyConnect}
+                  disabled={spotifyConnecting}
+                >
+                  CONNECT SPOTIFY
+                </button>
+              </>
+            )}
+          </div>
+          <span className="settings-hint">
+            Sign in once. Only your refresh token is stored locally — disconnect any time to wipe it.
+          </span>
         </div>
 
         <div className="settings-footer">

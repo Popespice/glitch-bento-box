@@ -552,6 +552,13 @@ html, body, #root {
   transform-origin: center bottom;
 }
 
+/* Freeze the waveform when nothing is actually playing — paused track,
+   disconnected, or idle. The bars keep their last position via the existing
+   transform; just no further animation cycles. */
+.playing-tile--paused .waveform-bar {
+  animation-play-state: paused;
+}
+
 .progress-row {
   display: flex;
   align-items: center;
@@ -1034,6 +1041,40 @@ html, body, #root {
 .settings-save--done {
   background: var(--seg-active);
   opacity: 1 !important;
+}
+
+/* Spotify section — flex row pairing status text with a connect/disconnect
+   button. Inline with the same status-text vocabulary used by the weather
+   geocode flow. */
+.settings-spotify-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 6px;
+}
+
+.settings-button {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  padding: 7px 14px;
+  background: var(--text-primary);
+  color: var(--tile-bg);
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.settings-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-button--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--separator);
 }
 
 /* ============================================================

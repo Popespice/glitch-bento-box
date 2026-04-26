@@ -5,12 +5,30 @@ import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
+import crypto from 'node:crypto'
 import si from 'systeminformation'
 import Store from 'electron-store'
+import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI } from './spotify-config.js'
 
 const execAsync = promisify(exec)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// ---------- Custom protocol (bento://) for Spotify OAuth callback ----------
+// Must be registered before app.whenReady() so the OS knows about the scheme.
+if (process.defaultApp && process.argv.length >= 2) {
+  app.setAsDefaultProtocolClient('bento', process.execPath, [path.resolve(process.argv[1])])
+} else {
+  app.setAsDefaultProtocolClient('bento')
+}
+
+// Single-instance lock: required so that on Windows/Linux the second invocation
+// (the one carrying the bento:// callback URL) gets routed back into the running
+// app rather than spawning a duplicate.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+}
 
 const store = new Store({
   defaults: {
@@ -26,8 +44,20 @@ const store = new Store({
     pomodoro: {
       minutes: 25,
     },
+    // Privacy: this section holds exactly one field — the OAuth refresh token,
+    // and only after the user explicitly clicks Connect. It's nulled on Disconnect.
+    // No client ID/secret (those are bundled at build time, not user data),
+    // no access token (kept in main-process memory only), no display name,
+    // no email/profile/listening data of any kind.
+    spotify: {
+      refreshToken: null,
+    },
   },
 })
+
+// In-memory only — never persisted, dies when the process exits.
+let _spotifyAccess = null    // { token: string, expiresAt: number (ms epoch) }
+let _pendingConnect = null   // { resolve, reject, state, timeoutId } during OAuth flow
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
@@ -72,6 +102,25 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// ---------- bento:// protocol routing ----------
+// macOS: protocol URLs arrive as their own event.
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  if (url.startsWith('bento://')) handleSpotifyCallback(url)
+})
+
+// Windows / Linux: protocol URLs arrive in argv when the OS launches a second
+// instance of the app to handle the URL. The single-instance lock above ensures
+// that second instance immediately quits and forwards argv to the running one.
+app.on('second-instance', (_event, argv) => {
+  const url = argv.find((a) => a.startsWith('bento://'))
+  if (url) handleSpotifyCallback(url)
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
 })
 
 // ---------- Window controls (custom traffic lights) ----------
@@ -339,6 +388,8 @@ ipcMain.handle('sys:weather', async () => {
 ipcMain.handle('settings:get', () => ({
   weather: store.get('weather'),
   github:  store.get('github'),
+  // Privacy: only return a boolean, never the token itself.
+  spotify: { connected: !!store.get('spotify.refreshToken') },
 }))
 
 ipcMain.handle('settings:set', (_event, key, value) => {
@@ -439,5 +490,258 @@ ipcMain.handle('sys:github-heatmap', async () => {
   } catch (err) {
     console.error('[github-heatmap]', err.message)
     return null // renderer falls back to seeded random
+  }
+})
+
+// ---------- Spotify ----------
+//
+// Auth flow: bundled-credential OAuth Authorization Code.
+// The user clicks Connect → main opens a minimal BrowserWindow pointed at the
+// Spotify authorize URL → user approves in that window → Spotify issues a
+// redirect to bento://callback?code=...&state=... → Electron's will-redirect /
+// will-navigate events intercept the bento:// URL before the OS ever sees it →
+// handleSpotifyCallback exchanges the code for tokens → window closes.
+//
+// Using an in-app window (rather than shell.openExternal + OS protocol routing)
+// is reliable in both dev and production: no Info.plist registration required,
+// no single-instance lock races, no macOS security quarantine edge cases.
+//
+// Privacy: only the refresh token is persisted to electron-store. Access tokens
+// + display name + everything else stays in main-process memory or is never
+// requested at all. See store defaults at the top of this file.
+
+const SPOTIFY_BASIC_AUTH = Buffer
+  .from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`)
+  .toString('base64')
+
+const SPOTIFY_SCOPE = 'user-read-currently-playing user-read-playback-state'
+const CONNECT_TIMEOUT_MS = 5 * 60 * 1000   // 5 minutes — abandon if user wanders off
+
+async function exchangeSpotifyToken(params) {
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: {
+      'Authorization':  `Basic ${SPOTIFY_BASIC_AUTH}`,
+      'Content-Type':   'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(params).toString(),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`Spotify token exchange failed: ${res.status} ${text}`)
+  }
+  return res.json()
+}
+
+/**
+ * Returns a valid access token, refreshing if needed.
+ * Throws 'NO_REFRESH_TOKEN' if the user hasn't connected.
+ * Throws 'REFRESH_FAILED' if Spotify rejects the refresh (e.g. token revoked).
+ */
+async function getValidAccessToken() {
+  if (_spotifyAccess && _spotifyAccess.expiresAt - Date.now() > 60_000) {
+    return _spotifyAccess.token
+  }
+  const refreshToken = store.get('spotify.refreshToken')
+  if (!refreshToken) throw new Error('NO_REFRESH_TOKEN')
+
+  let payload
+  try {
+    payload = await exchangeSpotifyToken({
+      grant_type:    'refresh_token',
+      refresh_token: refreshToken,
+    })
+  } catch (err) {
+    console.error('[spotify] refresh failed:', err.message)
+    throw new Error('REFRESH_FAILED')
+  }
+
+  _spotifyAccess = {
+    token:     payload.access_token,
+    expiresAt: Date.now() + (payload.expires_in * 1000),
+  }
+  // Spotify occasionally returns a new refresh token; rotate if so.
+  if (payload.refresh_token && payload.refresh_token !== refreshToken) {
+    store.set('spotify.refreshToken', payload.refresh_token)
+  }
+  return _spotifyAccess.token
+}
+
+function clearPendingConnect() {
+  if (_pendingConnect?.timeoutId) clearTimeout(_pendingConnect.timeoutId)
+  _pendingConnect = null
+}
+
+async function handleSpotifyCallback(url) {
+  if (!_pendingConnect) return  // stale or unsolicited — ignore silently
+
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    _pendingConnect.reject(new Error('Malformed callback URL'))
+    clearPendingConnect()
+    return
+  }
+
+  const code  = parsed.searchParams.get('code')
+  const state = parsed.searchParams.get('state')
+  const error = parsed.searchParams.get('error')
+
+  // Bring the app to the front regardless of outcome — user expects it.
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+
+  if (error) {
+    _pendingConnect.reject(new Error(error === 'access_denied' ? 'Permission denied' : error))
+    clearPendingConnect()
+    return
+  }
+  if (state !== _pendingConnect.state) {
+    _pendingConnect.reject(new Error('State mismatch (CSRF check failed)'))
+    clearPendingConnect()
+    return
+  }
+  if (!code) {
+    _pendingConnect.reject(new Error('No authorization code in callback'))
+    clearPendingConnect()
+    return
+  }
+
+  try {
+    const payload = await exchangeSpotifyToken({
+      grant_type:   'authorization_code',
+      code,
+      redirect_uri: SPOTIFY_REDIRECT_URI,
+    })
+    // Persist ONLY the refresh token. Access token + expiry stay in memory.
+    store.set('spotify.refreshToken', payload.refresh_token)
+    _spotifyAccess = {
+      token:     payload.access_token,
+      expiresAt: Date.now() + (payload.expires_in * 1000),
+    }
+    _pendingConnect.resolve({ ok: true })
+  } catch (err) {
+    _pendingConnect.reject(err)
+  } finally {
+    clearPendingConnect()
+  }
+}
+
+ipcMain.handle('spotify:connect', async () => {
+  if (_pendingConnect) {
+    return { ok: false, error: 'Connect already in progress' }
+  }
+
+  const state = crypto.randomBytes(16).toString('hex')
+  const authUrl = new URL('https://accounts.spotify.com/authorize')
+  authUrl.searchParams.set('response_type', 'code')
+  authUrl.searchParams.set('client_id',     SPOTIFY_CLIENT_ID)
+  authUrl.searchParams.set('redirect_uri',  SPOTIFY_REDIRECT_URI)
+  authUrl.searchParams.set('scope',         SPOTIFY_SCOPE)
+  authUrl.searchParams.set('state',         state)
+  authUrl.searchParams.set('show_dialog',   'true')
+
+  return new Promise((resolve, reject) => {
+    // Open a dedicated auth window so Electron intercepts the bento:// redirect
+    // directly via will-redirect / will-navigate — no OS protocol routing needed.
+    const authWin = new BrowserWindow({
+      width:  480,
+      height: 700,
+      title:  'Connect Spotify',
+      webPreferences: {
+        nodeIntegration:  false,
+        contextIsolation: true,
+        sandbox:          true,
+      },
+    })
+
+    const cleanup = (err) => {
+      if (!authWin.isDestroyed()) authWin.close()
+      clearPendingConnect()
+      if (err) reject(err)
+    }
+
+    const timeoutId = setTimeout(() => {
+      cleanup(new Error('Connect timed out — window closed?'))
+    }, CONNECT_TIMEOUT_MS)
+
+    _pendingConnect = { resolve, reject, state, timeoutId }
+
+    // Intercept the bento:// redirect before the webview tries to navigate to it.
+    const interceptRedirect = (_event, url) => {
+      if (!url.startsWith('bento://')) return
+      _event.preventDefault()
+      handleSpotifyCallback(url)   // resolves / rejects _pendingConnect
+      if (!authWin.isDestroyed()) authWin.close()
+    }
+    authWin.webContents.on('will-redirect', interceptRedirect)
+    authWin.webContents.on('will-navigate',  interceptRedirect)
+
+    // User closed the window without completing auth.
+    authWin.on('closed', () => {
+      if (_pendingConnect) cleanup(new Error('Auth window closed'))
+    })
+
+    authWin.loadURL(authUrl.toString())
+  }).then(
+    (result) => result,
+    (err)    => ({ ok: false, error: err.message }),
+  )
+})
+
+ipcMain.handle('spotify:disconnect', () => {
+  store.set('spotify.refreshToken', null)
+  _spotifyAccess = null
+  return { ok: true }
+})
+
+ipcMain.handle('sys:now-playing', async () => {
+  let token
+  try {
+    token = await getValidAccessToken()
+  } catch (err) {
+    if (err.message === 'REFRESH_FAILED') {
+      // Token revoked or otherwise invalid — wipe so the UI can prompt reconnect.
+      store.set('spotify.refreshToken', null)
+      _spotifyAccess = null
+    }
+    return { status: 'disconnected' }
+  }
+
+  let res
+  try {
+    res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  } catch (err) {
+    console.error('[spotify] currently-playing fetch failed:', err.message)
+    return { status: 'error' }
+  }
+
+  if (res.status === 204) return { status: 'idle' }    // nothing playing
+  if (!res.ok)            return { status: 'error' }
+
+  let data
+  try {
+    data = await res.json()
+  } catch {
+    return { status: 'error' }
+  }
+  if (!data?.item) return { status: 'idle' }
+
+  // Map ONLY the four fields the tile needs. Ignore the rest of the payload —
+  // defense-in-depth so we don't accidentally surface or store user metadata.
+  return {
+    status:    'playing',
+    isPlaying: !!data.is_playing,
+    track: {
+      name:     data.item.name,
+      artist:   (data.item.artists ?? []).map((a) => a.name).join(' / '),
+      duration: Math.floor((data.item.duration_ms ?? 0) / 1000),
+    },
+    position: Math.floor((data.progress_ms ?? 0) / 1000),
   }
 })
