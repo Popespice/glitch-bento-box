@@ -4,10 +4,17 @@ import { sys, isReal } from '../lib/sys.js'
 
 const SEGMENTS = 28
 
+function fmtTimeRemaining(minutes) {
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return h > 0 ? `${h}H ${String(m).padStart(2, '0')}M` : `${m}M`
+}
+
 export default function BatteryTile() {
-  const [level, setLevel] = useState(0)
-  const [charging, setCharging] = useState(false)
-  const [hasBattery, setHasBattery] = useState(true)
+  const [level,         setLevel]         = useState(0)
+  const [charging,      setCharging]      = useState(false)
+  const [hasBattery,    setHasBattery]    = useState(true)
+  const [timeRemaining, setTimeRemaining] = useState(-1)
 
   useEffect(() => {
     let cancelled = false
@@ -18,6 +25,7 @@ export default function BatteryTile() {
         setHasBattery(b.hasBattery)
         setLevel(b.percent ?? 0)
         setCharging(b.isCharging || b.acConnected)
+        setTimeRemaining(b.timeRemaining ?? -1)
       } catch {
         /* ignore */
       }
@@ -55,6 +63,11 @@ export default function BatteryTile() {
         <span className="tile-meta-line">
           {sourceLabel} / {stateLabel}
         </span>
+        {!charging && timeRemaining > 0 && (
+          <span className="tile-meta-line">
+            {fmtTimeRemaining(timeRemaining)} REMAINING
+          </span>
+        )}
       </div>
     </div>
   )

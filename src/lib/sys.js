@@ -15,7 +15,10 @@ const mocks = {
     windSpeed: 7, windDir: 'NW',
   }),
   lastCommand: async () => ({ verb: 'GIT', full: 'git push origin main', shell: 'ZSH' }),
-  settingsGet:     async () => ({ weather: { query: '', locationName: '', lat: null, lon: null }, github: { username: '' } }),
+  uptime:      async () => ({ uptime: 3600 * 24 * 2 + 3600 * 14 + 60 * 22 }),
+  disk:        async () => ({ totalGB: 500, usedGB: 312, freeGB: 188, pct: 62 }),
+  playSound:   async () => {},
+  settingsGet: async () => ({ weather: { query: '', locationName: '', lat: null, lon: null }, github: { username: '' }, pomodoro: { minutes: 25 } }),
   settingsSet:     async () => true,
   settingsGeocode: async (query) => ({ lat: 40.7128, lon: -74.0060, locationName: `${query} (mock)` }),
   windowClose:    () => {},
@@ -47,6 +50,7 @@ const mocks = {
     percent: 87,
     isCharging: false,
     acConnected: false,
+    timeRemaining: 142,
   }),
 }
 

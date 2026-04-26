@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('bento', {
   githubHeatmap:  () => ipcRenderer.invoke('sys:github-heatmap'),
   weather:        () => ipcRenderer.invoke('sys:weather'),
   lastCommand:    () => ipcRenderer.invoke('sys:last-command'),
+  uptime:         () => ipcRenderer.invoke('sys:uptime'),
+  disk:           () => ipcRenderer.invoke('sys:disk'),
+  playSound:      (sound) => ipcRenderer.invoke('sys:play-sound', sound),
 
   // Settings
   settingsGet:     ()          => ipcRenderer.invoke('settings:get'),

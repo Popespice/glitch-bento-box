@@ -820,14 +820,60 @@ html, body, #root {
 }
 
 /* ============================================================
-   COLOR SWATCH TILE
+   SYSTEM INFO / POMODORO TILE (glyph-tile)
    ============================================================ */
-.color-swatch {
-  flex: 1;
-  min-height: 0;
+.glyph-section-label {
+  margin-top: 10px;
+}
+
+.glyph-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 2px 0 3px;
+}
+
+.glyph-segments {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.glyph-timer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.glyph-btn {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  background: var(--bar-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--separator);
+  padding: 4px 9px;
   cursor: pointer;
-  transition: background-color 0.8s ease;
-  margin: 6px 0 4px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.glyph-btn:hover {
+  background: var(--text-primary);
+  color: var(--tile-bg);
+}
+
+.glyph-btn--sm {
+  font-size: 9px;
+  padding: 3px 6px;
+  color: var(--text-secondary);
+}
+
+.glyph-timer-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.10em;
+  color: var(--text-secondary);
 }
 
 /* ============================================================

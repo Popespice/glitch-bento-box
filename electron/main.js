@@ -23,6 +23,9 @@ const store = new Store({
     github: {
       username: '',
     },
+    pomodoro: {
+      minutes: 25,
+    },
   },
 })
 
@@ -141,10 +144,35 @@ ipcMain.handle('sys:network', async () => {
 ipcMain.handle('sys:battery', async () => {
   const b = await si.battery()
   return {
-    hasBattery:  b.hasBattery,
-    percent:     b.percent,
-    isCharging:  b.isCharging,
-    acConnected: b.acConnected,
+    hasBattery:    b.hasBattery,
+    percent:       b.percent,
+    isCharging:    b.isCharging,
+    acConnected:   b.acConnected,
+    timeRemaining: b.timeRemaining ?? -1,  // minutes, -1 = unknown/charging
+  }
+})
+
+ipcMain.handle('sys:uptime', async () => {
+  const t = await si.time()
+  return { uptime: t.uptime }   // seconds since boot
+})
+
+ipcMain.handle('sys:disk', async () => {
+  const disks = await si.fsSize()
+  const main = disks.find(d => d.mount === '/') ?? disks[0]
+  if (!main) return null
+  return {
+    totalGB: Number((main.size / 1e9).toFixed(1)),
+    usedGB:  Number((main.used / 1e9).toFixed(1)),
+    freeGB:  Number(((main.size - main.used) / 1e9).toFixed(1)),
+    pct:     Math.round(main.use),
+  }
+})
+
+// Fire-and-forget: plays a macOS system sound. No-op on Windows.
+ipcMain.handle('sys:play-sound', (_event, sound = 'Glass') => {
+  if (process.platform === 'darwin') {
+    exec(`afplay "/System/Library/Sounds/${sound}.aiff"`)
   }
 })
 
