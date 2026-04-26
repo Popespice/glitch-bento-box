@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('bento', {
   battery:        () => ipcRenderer.invoke('sys:battery'),
   githubHeatmap:  () => ipcRenderer.invoke('sys:github-heatmap'),
   weather:        () => ipcRenderer.invoke('sys:weather'),
+  lastCommand:    () => ipcRenderer.invoke('sys:last-command'),
 
   // Settings
   settingsGet:     ()          => ipcRenderer.invoke('settings:get'),

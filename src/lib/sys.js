@@ -14,6 +14,7 @@ const mocks = {
     tempF: 58, condition: 'PARTLY CLOUDY', humidity: 64,
     windSpeed: 7, windDir: 'NW',
   }),
+  lastCommand: async () => ({ verb: 'GIT', full: 'git push origin main', shell: 'ZSH' }),
   settingsGet:     async () => ({ weather: { query: '', locationName: '', lat: null, lon: null }, github: { username: '' } }),
   settingsSet:     async () => true,
   settingsGeocode: async (query) => ({ lat: 40.7128, lon: -74.0060, locationName: `${query} (mock)` }),

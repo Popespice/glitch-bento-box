@@ -39,7 +39,7 @@ export default function BatteryTile() {
       <span className="tile-label">BATTERY{charging ? ' ● CHARGING' : ''}</span>
       <div className="tile-value-row">
         <div className="tile-value-matrix">
-          <DotMatrix text={`${level}.`} />
+          <DotMatrix text={String(level)} />
         </div>
         <span className="tile-value-unit">%</span>
       </div>

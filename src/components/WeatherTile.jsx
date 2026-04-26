@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
+import WeatherDotIcon from './WeatherDotIcon.jsx'
 import { sys } from '../lib/sys.js'
 
 export default function WeatherTile() {
@@ -47,13 +48,18 @@ export default function WeatherTile() {
       <div className="tile-value-row">
         {showMatrix ? (
           <div className="tile-value-matrix">
-            <DotMatrix text={`${temp}.`} />
+            <DotMatrix text={temp} />
           </div>
         ) : (
           <span style={{ color: 'var(--text-secondary)', fontFamily: 'Space Mono', fontSize: 28 }}>—</span>
         )}
         <span className="tile-value-unit">°F</span>
       </div>
+      {showMatrix && (
+        <div className="weather-icon-row">
+          <WeatherDotIcon condition={w.condition} />
+        </div>
+      )}
       <div className="tile-meta">
         {w.tempF === null ? (
           <span className="tile-meta-line" style={{ color: 'var(--accent)' }}>CONFIGURE IN SETTINGS</span>

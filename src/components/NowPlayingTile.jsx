@@ -2,6 +2,18 @@ import { useEffect, useMemo, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 
 const BARS = 36
+const PROGRESS_DOTS = 36
+
+function DotProgressBar({ pct }) {
+  const filled = Math.round((pct / 100) * PROGRESS_DOTS)
+  return (
+    <div className="progress-dot-bar">
+      {Array.from({ length: PROGRESS_DOTS }, (_, i) => (
+        <div key={i} className={`progress-dot${i < filled ? ' active' : ''}`} />
+      ))}
+    </div>
+  )
+}
 
 function fmt(sec) {
   const m = Math.floor(sec / 60)
@@ -58,9 +70,7 @@ export default function NowPlayingTile() {
       </div>
       <div className="progress-row">
         <span className="progress-time"><DotMatrix text={fmt(position)} /></span>
-        <div className="progress-track">
-          <div className="progress-fill" style={{ width: `${pct}%` }} />
-        </div>
+        <DotProgressBar pct={pct} />
         <span className="progress-time"><DotMatrix text={fmt(track.duration)} /></span>
       </div>
     </div>

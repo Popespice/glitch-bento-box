@@ -3,6 +3,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
+import fs from 'node:fs'
+import os from 'node:os'
 import si from 'systeminformation'
 import Store from 'electron-store'
 
@@ -144,6 +146,61 @@ ipcMain.handle('sys:battery', async () => {
     isCharging:  b.isCharging,
     acConnected: b.acConnected,
   }
+})
+
+// ---------- Last shell command (from history file) ----------
+
+function tailFile(filePath, bytes = 8192) {
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const { size } = fs.fstatSync(fd)
+    const len = Math.min(bytes, size)
+    const buf = Buffer.alloc(len)
+    fs.readSync(fd, buf, 0, len, size - len)
+    return buf.toString('utf8')
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+ipcMain.handle('sys:last-command', () => {
+  const home = os.homedir()
+  const candidates = [
+    { path: `${home}/.zsh_history`, shell: 'ZSH', extended: true },
+    { path: `${home}/.bash_history`, shell: 'BASH', extended: false },
+  ]
+
+  for (const { path: histPath, shell, extended } of candidates) {
+    try {
+      const text = tailFile(histPath)
+      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+
+      let command = null
+      if (extended) {
+        // Walk backwards looking for the last extended-format entry
+        // ': timestamp:elapsed;command'. Plain entries look like normal commands.
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const ext = lines[i].match(/^: \d+:\d+;(.+)/)
+          if (ext) { command = ext[1]; break }
+        }
+        // If no extended entries found, treat as plain
+        if (!command && lines.length) command = lines[lines.length - 1]
+      } else {
+        command = lines[lines.length - 1] ?? null
+      }
+
+      if (!command) continue
+      const trimmed = command.trim()
+      const verb = trimmed.split(/\s+/)[0].toUpperCase()
+      // Some verbs may contain non-alpha chars (e.g. './foo', '~/script') — strip
+      // anything DotMatrix can't render to keep the verb clean. Letters/digits/dash only.
+      const cleanVerb = verb.replace(/[^A-Z0-9\-]/g, '') || 'CMD'
+      return { verb: cleanVerb, full: trimmed, shell }
+    } catch {
+      // file not found or unreadable — try next candidate
+    }
+  }
+  return null
 })
 
 // ---------- Weather (Open-Meteo, no API key) ----------

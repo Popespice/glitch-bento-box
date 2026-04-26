@@ -44,7 +44,7 @@ export default function CPUTile() {
       <div className="cpu-header">
         <div className="cpu-value-block">
           <div className="tile-value-matrix md">
-            <DotMatrix text={`${Math.round(cpu)}.`} />
+            <DotMatrix text={String(Math.round(cpu))} />
           </div>
           <span className="tile-value-unit">%</span>
         </div>

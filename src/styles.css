@@ -772,29 +772,72 @@ html, body, #root {
 }
 
 /* ============================================================
-   SETTINGS BUTTON (sits to the left of the theme toggle)
+   WEATHER DOT-MATRIX ICON
+   ============================================================ */
+.weather-icon-row {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  margin: 4px 0 2px;
+}
+.weather-icon-row svg {
+  height: 100%;
+  width: auto;
+  display: block;
+}
+
+/* ============================================================
+   DOT-MATRIX PROGRESS BAR (now-playing timeline)
+   ============================================================ */
+.progress-dot-bar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 7px;
+}
+.progress-dot {
+  flex: 1;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bar-bg);
+  transition: background-color 0.4s ease;
+}
+.progress-dot.active {
+  background: var(--accent);
+}
+
+/* ============================================================
+   LAST CMD TILE
+   ============================================================ */
+.last-cmd-full {
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+/* ============================================================
+   SETTINGS BUTTON — bare gear icon, sits left of theme toggle
    ============================================================ */
 .settings-btn {
   position: fixed;
   bottom: 16px;
-  /* theme-toggle is roughly 70px wide @ 14px padding + 'LIGHT' text;
-     12px gap between the two */
-  right: 96px;
-  font-family: 'Space Mono', monospace;
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  padding: 8px 14px;
-  background: var(--tile-bg);
+  right: 90px;
+  font-size: 16px;
+  line-height: 1;
+  padding: 6px 8px;
+  background: none;
+  border: none;
   color: var(--text-secondary);
-  border: 1px solid var(--separator);
   cursor: pointer;
-  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+  transition: color 0.25s ease;
   z-index: 100;
 }
 
 .settings-btn:hover {
   color: var(--text-primary);
-  border-color: var(--text-secondary);
 }
 
 /* ============================================================

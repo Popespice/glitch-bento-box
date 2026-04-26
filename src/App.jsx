@@ -45,7 +45,7 @@ export default function App() {
         <NextEventTile />
       </div>
       <button className="settings-btn" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
-        ⚙ SET
+        ⚙
       </button>
       <button className="theme-toggle" onClick={toggle} aria-label="Toggle theme">
         {theme === 'dark' ? '◐ LIGHT' : '◑ DARK'}
