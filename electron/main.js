@@ -101,6 +101,53 @@ ipcMain.handle('sys:cpu', async () => {
   }
 })
 
+// GPU model is expensive to fetch (system_profiler / si.graphics() can take seconds)
+// but the model name never changes during a session, so cache it after first lookup.
+let gpuModelCache = null
+async function getGpuModel() {
+  if (gpuModelCache) return gpuModelCache
+  try {
+    const g = await si.graphics()
+    const ctrl = g.controllers?.[0]
+    gpuModelCache = ctrl?.model || ctrl?.name || 'GPU'
+  } catch {
+    gpuModelCache = 'GPU'
+  }
+  return gpuModelCache
+}
+
+ipcMain.handle('sys:gpu', async () => {
+  // macOS: `ioreg -rc IOAccelerator` exposes "Device Utilization %" in the
+  // PerformanceStatistics dict — works without sudo on both Intel and Apple Silicon.
+  if (process.platform === 'darwin') {
+    try {
+      const { stdout } = await execAsync('ioreg -rc IOAccelerator', { timeout: 1500 })
+      const match = stdout.match(/"Device Utilization %"=(\d+)/)
+      if (match) {
+        const pct = parseInt(match[1], 10)
+        return {
+          percent: Math.max(0, Math.min(100, pct)),
+          model: await getGpuModel(),
+        }
+      }
+    } catch { /* fall through */ }
+  }
+
+  // Cross-platform fallback — works on some Windows/NVIDIA/AMD drivers, often 0 on Linux.
+  try {
+    const g = await si.graphics()
+    const ctrl =
+      g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ??
+      g.controllers?.[0]
+    return {
+      percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
+      model: ctrl?.model || ctrl?.name || 'GPU',
+    }
+  } catch {
+    return { percent: 0, model: 'GPU' }
+  }
+})
+
 ipcMain.handle('sys:memory', async () => {
   const m = await si.mem()
   return {

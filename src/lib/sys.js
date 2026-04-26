@@ -30,6 +30,10 @@ const mocks = {
     speedGhz: 3.61,
     brand: 'Mock CPU',
   }),
+  gpu: async () => ({
+    percent: Math.round(jitter(5, 65)),
+    model: 'Mock GPU',
+  }),
   memory: async () => ({
     totalGB: 16,
     usedGB: Number(jitter(8, 13).toFixed(1)),

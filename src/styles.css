@@ -32,7 +32,6 @@ html, body, #root {
   --toggle-active-text: #0d0d0d;
   --seg-active: #3fdc6c;
   --seg-inactive: #1a2e1f;
-  --ekg-stroke: #e0e0e0;
   --heatmap-warm: #b08040;
   --heatmap-cool: #3a7a6a;
   --heatmap-empty: #161616;
@@ -59,7 +58,6 @@ html, body, #root {
   --toggle-active-text: #f8f8f8;
   --seg-active: #2db557;
   --seg-inactive: #d8edd8;
-  --ekg-stroke: #0d0d0d;
   --heatmap-warm: #c89040;
   --heatmap-cool: #4a9a80;
   --heatmap-empty: #e8e8e8;
@@ -345,7 +343,7 @@ html, body, #root {
   display: flex;
   align-items: flex-end;
   gap: 6px;
-  margin: 2px 0 4px;
+  margin: 2px 0 6px;
 }
 
 .pulse-unit {
@@ -357,27 +355,15 @@ html, body, #root {
   transition: color 0.35s ease;
 }
 
-.ekg-wrapper {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
-  display: flex;
-  align-items: center;
+.pulse-dot-chart {
+  display: block;
+  width: 100%;
+  height: auto;        /* preserves 4:1 aspect from viewBox so dots stay round */
+  margin: 4px 0 6px;
 }
 
-.ekg-wrapper svg {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 300%;
-  height: 100%;
-  animation: ekg-scroll 4s linear infinite;
-}
-
-.ekg-wrapper svg path {
-  transition: stroke 0.35s ease;
+.pulse-dot-chart circle {
+  transition: fill 0.25s ease;
 }
 
 /* ============================================================
@@ -1059,11 +1045,6 @@ html.window-hidden *,
 html.window-hidden *::before,
 html.window-hidden *::after {
   animation-play-state: paused !important;
-}
-
-@keyframes ekg-scroll {
-  from { transform: translateY(-50%) translateX(0); }
-  to   { transform: translateY(-50%) translateX(-33.333%); }
 }
 
 @keyframes wave-pulse {

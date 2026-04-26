@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('bento', {
   // System stats
   platform:       () => ipcRenderer.invoke('sys:platform'),
   cpu:            () => ipcRenderer.invoke('sys:cpu'),
+  gpu:            () => ipcRenderer.invoke('sys:gpu'),
   memory:         () => ipcRenderer.invoke('sys:memory'),
   network:        () => ipcRenderer.invoke('sys:network'),
   battery:        () => ipcRenderer.invoke('sys:battery'),
