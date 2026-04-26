@@ -20,6 +20,15 @@ contextBridge.exposeInMainWorld('bento', {
   spotifyConnect:    () => ipcRenderer.invoke('spotify:connect'),
   spotifyDisconnect: () => ipcRenderer.invoke('spotify:disconnect'),
 
+  // Calendar (CalDAV: iCloud + Google)
+  calendarStatus:        ()      => ipcRenderer.invoke('calendar:status'),
+  calendarConnectIcloud: (u, p)  => ipcRenderer.invoke('calendar:connect-icloud', u, p),
+  calendarConnectGoogle: ()      => ipcRenderer.invoke('calendar:connect-google'),
+  calendarGetCalendars:  ()      => ipcRenderer.invoke('calendar:get-calendars'),
+  calendarSetActive:     (ids)   => ipcRenderer.invoke('calendar:set-active-calendars', ids),
+  calendarDisconnect:    ()      => ipcRenderer.invoke('calendar:disconnect'),
+  calendarNextEvent:     ()      => ipcRenderer.invoke('sys:calendar-next-event'),
+
   // Settings
   settingsGet:     ()          => ipcRenderer.invoke('settings:get'),
   settingsSet:     (key, val)  => ipcRenderer.invoke('settings:set', key, val),

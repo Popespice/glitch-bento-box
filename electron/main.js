@@ -9,6 +9,9 @@ import crypto from 'node:crypto'
 import si from 'systeminformation'
 import Store from 'electron-store'
 import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI } from './spotify-config.js'
+import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } from './google-calendar-config.js'
+import { createDAVClient } from 'tsdav'
+import nodeIcal from 'node-ical'
 
 const execAsync = promisify(exec)
 const __filename = fileURLToPath(import.meta.url)
@@ -52,12 +55,25 @@ const store = new Store({
     spotify: {
       refreshToken: null,
     },
+    // Privacy: stored locally only. iCloud uses an app-specific password (user
+    // generates at appleid.apple.com). Google stores only the refresh token +
+    // email needed to construct the CalDAV URL. No event data is ever persisted.
+    calendar: {
+      provider:           null,   // 'icloud' | 'google' | null
+      icloudUsername:     '',
+      icloudAppPassword:  '',
+      googleRefreshToken: null,
+      googleEmail:        '',
+      activeCalendarIds:  [],     // calendar URLs the user opted into
+    },
   },
 })
 
 // In-memory only — never persisted, dies when the process exits.
-let _spotifyAccess = null    // { token: string, expiresAt: number (ms epoch) }
-let _pendingConnect = null   // { resolve, reject, state, timeoutId } during OAuth flow
+let _spotifyAccess     = null   // { token: string, expiresAt: number (ms epoch) }
+let _pendingConnect    = null   // { resolve, reject, state, timeoutId } during Spotify OAuth flow
+let _googleAccess      = null   // { token: string, expiresAt: number }
+let _pendingGCalConnect = null  // { resolve, reject, state, timeoutId } during Google OAuth flow
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
@@ -743,5 +759,385 @@ ipcMain.handle('sys:now-playing', async () => {
       duration: Math.floor((data.item.duration_ms ?? 0) / 1000),
     },
     position: Math.floor((data.progress_ms ?? 0) / 1000),
+  }
+})
+
+// ---------- Calendar (CalDAV: iCloud + Google) ----------
+//
+// Supports two providers, one active at a time:
+//   - iCloud:  Basic auth with an app-specific password (user generates at appleid.apple.com)
+//   - Google:  OAuth 2.0 with bundled developer credentials (mirrors Spotify pattern)
+//
+// Privacy: only the credentials needed to refresh access are persisted. No event
+// titles, attendees, locations, or descriptions ever touch electron-store. Each
+// fetch maps Spotify-style to a minimal payload — title, start time, calendar name —
+// so accidental over-storage is structurally prevented.
+
+const ICLOUD_SERVER_URL = 'https://caldav.icloud.com'
+const GOOGLE_SERVER_URL = 'https://apidata.googleusercontent.com/caldav/v2/'
+const GOOGLE_TOKEN_URL  = 'https://oauth2.googleapis.com/token'
+const GOOGLE_AUTH_URL   = 'https://accounts.google.com/o/oauth2/v2/auth'
+const GOOGLE_USERINFO   = 'https://www.googleapis.com/oauth2/v2/userinfo'
+const GOOGLE_SCOPE      = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email'
+const EVENT_LOOKAHEAD_MS = 14 * 24 * 60 * 60 * 1000   // 14 days
+
+function clearPendingGCalConnect() {
+  if (_pendingGCalConnect?.timeoutId) clearTimeout(_pendingGCalConnect.timeoutId)
+  _pendingGCalConnect = null
+}
+
+async function exchangeGoogleToken(params) {
+  const res = await fetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id:     GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      ...params,
+    }).toString(),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`Google token exchange failed: ${res.status} ${text}`)
+  }
+  return res.json()
+}
+
+async function getValidGoogleAccessToken() {
+  if (_googleAccess && _googleAccess.expiresAt - Date.now() > 60_000) {
+    return _googleAccess.token
+  }
+  const refreshToken = store.get('calendar.googleRefreshToken')
+  if (!refreshToken) throw new Error('NO_REFRESH_TOKEN')
+
+  let payload
+  try {
+    payload = await exchangeGoogleToken({
+      grant_type:    'refresh_token',
+      refresh_token: refreshToken,
+    })
+  } catch (err) {
+    console.error('[calendar/google] refresh failed:', err.message)
+    throw new Error('REFRESH_FAILED')
+  }
+  _googleAccess = {
+    token:     payload.access_token,
+    expiresAt: Date.now() + (payload.expires_in * 1000),
+  }
+  // Google occasionally rotates refresh tokens; persist if returned.
+  if (payload.refresh_token) {
+    store.set('calendar.googleRefreshToken', payload.refresh_token)
+  }
+  return _googleAccess.token
+}
+
+async function buildIcloudClient() {
+  const username = store.get('calendar.icloudUsername')
+  const password = store.get('calendar.icloudAppPassword')
+  if (!username || !password) throw new Error('NO_CREDS')
+  return createDAVClient({
+    serverUrl:          ICLOUD_SERVER_URL,
+    credentials:        { username, password },
+    authMethod:         'Basic',
+    defaultAccountType: 'caldav',
+  })
+}
+
+async function buildGoogleClient() {
+  const username = store.get('calendar.googleEmail')
+  const refreshToken = store.get('calendar.googleRefreshToken')
+  if (!username || !refreshToken) throw new Error('NO_CREDS')
+  // Verify token works (will throw NO_REFRESH_TOKEN / REFRESH_FAILED on issues)
+  await getValidGoogleAccessToken()
+  return createDAVClient({
+    serverUrl:   GOOGLE_SERVER_URL,
+    credentials: {
+      tokenUrl:     GOOGLE_TOKEN_URL,
+      username,
+      refreshToken,
+      clientId:     GOOGLE_CLIENT_ID,
+      clientSecret: GOOGLE_CLIENT_SECRET,
+    },
+    authMethod:         'Oauth',
+    defaultAccountType: 'caldav',
+  })
+}
+
+async function buildActiveClient() {
+  const provider = store.get('calendar.provider')
+  if (provider === 'icloud') return { provider, client: await buildIcloudClient() }
+  if (provider === 'google') return { provider, client: await buildGoogleClient() }
+  throw new Error('NO_PROVIDER')
+}
+
+ipcMain.handle('calendar:status', () => {
+  const provider = store.get('calendar.provider')
+  const connected =
+    (provider === 'icloud' && !!store.get('calendar.icloudAppPassword')) ||
+    (provider === 'google' && !!store.get('calendar.googleRefreshToken'))
+  return {
+    provider,
+    connected,
+    activeCalendarIds: store.get('calendar.activeCalendarIds') || [],
+  }
+})
+
+ipcMain.handle('calendar:connect-icloud', async (_event, username, appPassword) => {
+  if (!username || !appPassword) {
+    return { ok: false, error: 'Username and app password required' }
+  }
+  try {
+    const client = await createDAVClient({
+      serverUrl:          ICLOUD_SERVER_URL,
+      credentials:        { username, password: appPassword },
+      authMethod:         'Basic',
+      defaultAccountType: 'caldav',
+    })
+    const cals = await client.fetchCalendars()
+    // Persist only after we've verified it actually works
+    store.set('calendar.provider',          'icloud')
+    store.set('calendar.icloudUsername',    username)
+    store.set('calendar.icloudAppPassword', appPassword)
+    store.set('calendar.googleRefreshToken', null)
+    store.set('calendar.googleEmail',        '')
+    return { ok: true, calendars: cals.map(mapCalendar) }
+  } catch (err) {
+    console.error('[calendar/icloud] connect failed:', err?.message || err)
+    return { ok: false, error: err?.message || 'iCloud connection failed' }
+  }
+})
+
+ipcMain.handle('calendar:connect-google', async () => {
+  if (_pendingGCalConnect) return { ok: false, error: 'Connect already in progress' }
+
+  const state = crypto.randomBytes(16).toString('hex')
+  const authUrl = new URL(GOOGLE_AUTH_URL)
+  authUrl.searchParams.set('response_type', 'code')
+  authUrl.searchParams.set('client_id',     GOOGLE_CLIENT_ID)
+  authUrl.searchParams.set('redirect_uri',  GOOGLE_REDIRECT_URI)
+  authUrl.searchParams.set('scope',         GOOGLE_SCOPE)
+  authUrl.searchParams.set('access_type',   'offline')   // we need refresh_token
+  authUrl.searchParams.set('prompt',        'consent')   // force consent so refresh_token is always returned
+  authUrl.searchParams.set('state',         state)
+
+  return new Promise((resolve, reject) => {
+    const authWin = new BrowserWindow({
+      width: 480, height: 700, title: 'Connect Google Calendar',
+      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+    })
+
+    const cleanup = (err) => {
+      if (!authWin.isDestroyed()) authWin.close()
+      clearPendingGCalConnect()
+      if (err) reject(err)
+    }
+
+    const timeoutId = setTimeout(() => {
+      cleanup(new Error('Connect timed out — window closed?'))
+    }, 5 * 60 * 1000)
+
+    _pendingGCalConnect = { resolve, reject, state, timeoutId }
+
+    const intercept = async (event, url) => {
+      if (!url.startsWith(GOOGLE_REDIRECT_URI)) return
+      event.preventDefault()
+      try {
+        const parsed = new URL(url)
+        const code  = parsed.searchParams.get('code')
+        const error = parsed.searchParams.get('error')
+        const cbState = parsed.searchParams.get('state')
+
+        if (error) throw new Error(error === 'access_denied' ? 'Permission denied' : error)
+        if (cbState !== state) throw new Error('State mismatch (CSRF check failed)')
+        if (!code) throw new Error('No authorization code returned')
+
+        const tokenPayload = await exchangeGoogleToken({
+          grant_type:   'authorization_code',
+          code,
+          redirect_uri: GOOGLE_REDIRECT_URI,
+        })
+
+        // Get the email needed to construct the CalDAV URL
+        const userinfoRes = await fetch(GOOGLE_USERINFO, {
+          headers: { Authorization: `Bearer ${tokenPayload.access_token}` },
+        })
+        if (!userinfoRes.ok) throw new Error('Could not fetch Google account email')
+        const userinfo = await userinfoRes.json()
+        if (!userinfo.email) throw new Error('Google did not return an email')
+
+        // Persist ONLY refresh token + email; access token in memory only.
+        store.set('calendar.provider',           'google')
+        store.set('calendar.googleRefreshToken', tokenPayload.refresh_token)
+        store.set('calendar.googleEmail',        userinfo.email)
+        store.set('calendar.icloudUsername',     '')
+        store.set('calendar.icloudAppPassword',  '')
+        _googleAccess = {
+          token:     tokenPayload.access_token,
+          expiresAt: Date.now() + (tokenPayload.expires_in * 1000),
+        }
+
+        // Fetch calendar list now so the renderer can show the picker.
+        const client = await buildGoogleClient()
+        const cals = await client.fetchCalendars()
+
+        cleanup()
+        resolve({ ok: true, calendars: cals.map(mapCalendar) })
+      } catch (err) {
+        cleanup()
+        resolve({ ok: false, error: err?.message || 'Google connect failed' })
+      }
+    }
+    authWin.webContents.on('will-redirect', intercept)
+    authWin.webContents.on('will-navigate', intercept)
+
+    authWin.on('closed', () => {
+      if (_pendingGCalConnect) {
+        clearPendingGCalConnect()
+        resolve({ ok: false, error: 'Auth window closed' })
+      }
+    })
+
+    authWin.loadURL(authUrl.toString())
+  })
+})
+
+ipcMain.handle('calendar:get-calendars', async () => {
+  try {
+    const { client } = await buildActiveClient()
+    const cals = await client.fetchCalendars()
+    return { ok: true, calendars: cals.map(mapCalendar) }
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Could not fetch calendars' }
+  }
+})
+
+ipcMain.handle('calendar:set-active-calendars', (_event, ids) => {
+  store.set('calendar.activeCalendarIds', Array.isArray(ids) ? ids : [])
+  return true
+})
+
+ipcMain.handle('calendar:disconnect', () => {
+  store.set('calendar.provider',           null)
+  store.set('calendar.icloudUsername',     '')
+  store.set('calendar.icloudAppPassword',  '')
+  store.set('calendar.googleRefreshToken', null)
+  store.set('calendar.googleEmail',        '')
+  store.set('calendar.activeCalendarIds',  [])
+  _googleAccess = null
+  return { ok: true }
+})
+
+// Map a tsdav calendar to the minimal shape the renderer needs.
+function mapCalendar(cal) {
+  // tsdav calendar shape: { url, displayName, ctag, calendarColor, components, ... }
+  return {
+    id:    cal.url,
+    name:  typeof cal.displayName === 'string'
+             ? cal.displayName
+             : (cal.displayName?._cdata || cal.displayName?.['#text'] || 'Untitled'),
+    color: cal.calendarColor || null,
+  }
+}
+
+// Pull every VEVENT (including expanded recurring instances) out of a chunk
+// of raw iCalendar data, returning future-only events as { start, title }.
+function extractFutureEvents(rawICS, calendarName, lookaheadMs) {
+  const now = Date.now()
+  const horizon = now + lookaheadMs
+  const out = []
+  let parsed
+  try {
+    parsed = nodeIcal.sync.parseICS(rawICS)
+  } catch {
+    return out
+  }
+  for (const ev of Object.values(parsed)) {
+    if (ev?.type !== 'VEVENT') continue
+    const title = (ev.summary || '').toString().trim() || 'Untitled'
+
+    // Recurring: expand within [now, horizon] using rrule
+    if (ev.rrule) {
+      let occurrences = []
+      try {
+        occurrences = ev.rrule.between(new Date(now), new Date(horizon), true)
+      } catch {
+        occurrences = []
+      }
+      for (const occ of occurrences) {
+        const ts = occ.getTime()
+        if (ts >= now && ts <= horizon) out.push({ start: ts, title, calendarName })
+      }
+    } else if (ev.start) {
+      const ts = new Date(ev.start).getTime()
+      if (ts >= now && ts <= horizon) out.push({ start: ts, title, calendarName })
+    }
+  }
+  return out
+}
+
+ipcMain.handle('sys:calendar-next-event', async () => {
+  let provider, client
+  try {
+    ({ provider, client } = await buildActiveClient())
+  } catch (err) {
+    if (err.message === 'REFRESH_FAILED') {
+      // Google refresh token revoked — wipe so the UI prompts reconnect.
+      store.set('calendar.googleRefreshToken', null)
+      _googleAccess = null
+    }
+    return { status: 'disconnected' }
+  }
+
+  let cals
+  try {
+    cals = await client.fetchCalendars()
+  } catch (err) {
+    console.error('[calendar] fetchCalendars failed:', err?.message || err)
+    return { status: 'error' }
+  }
+
+  const activeIds = store.get('calendar.activeCalendarIds') || []
+  const targets = activeIds.length
+    ? cals.filter((c) => activeIds.includes(c.url))
+    : cals
+  if (targets.length === 0) return { status: 'no-event' }
+
+  const now = Date.now()
+  const lookahead = EVENT_LOOKAHEAD_MS
+
+  // Fan out across calendars; collect candidate events, pick the soonest.
+  const allEvents = []
+  await Promise.all(targets.map(async (cal) => {
+    try {
+      const objects = await client.fetchCalendarObjects({
+        calendar:  cal,
+        timeRange: {
+          start: new Date(now).toISOString(),
+          end:   new Date(now + lookahead).toISOString(),
+        },
+        // Google supports server-side expansion; iCloud ignores it harmlessly,
+        // and we expand client-side via rrule as a fallback either way.
+        expand: provider === 'google',
+      })
+      const calName = mapCalendar(cal).name
+      for (const obj of objects) {
+        if (!obj?.data) continue
+        allEvents.push(...extractFutureEvents(obj.data, calName, lookahead))
+      }
+    } catch (err) {
+      console.error(`[calendar] failed fetching "${cal.url}":`, err?.message || err)
+    }
+  }))
+
+  if (allEvents.length === 0) return { status: 'no-event' }
+
+  // Soonest future event
+  allEvents.sort((a, b) => a.start - b.start)
+  const next = allEvents[0]
+  return {
+    status:       'event',
+    title:        next.title,
+    start:        next.start,
+    calendarName: next.calendarName,
   }
 })

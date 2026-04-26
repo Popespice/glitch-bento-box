@@ -26,6 +26,18 @@ const mocks = {
   }),
   spotifyConnect:    async () => ({ ok: false, error: 'Not available in dev mode' }),
   spotifyDisconnect: async () => ({ ok: true }),
+  calendarStatus:        async () => ({ provider: null, connected: false, activeCalendarIds: [] }),
+  calendarConnectIcloud: async () => ({ ok: false, error: 'Not available in dev mode' }),
+  calendarConnectGoogle: async () => ({ ok: false, error: 'Not available in dev mode' }),
+  calendarGetCalendars:  async () => ({ ok: true, calendars: [] }),
+  calendarSetActive:     async () => true,
+  calendarDisconnect:    async () => ({ ok: true }),
+  calendarNextEvent:     async () => ({
+    status:       'event',
+    title:        'Design Review',
+    start:        Date.now() + 24 * 60 * 1000,
+    calendarName: 'WORK',
+  }),
   settingsGet: async () => ({
     weather:  { query: '', locationName: '', lat: null, lon: null },
     github:   { username: '' },

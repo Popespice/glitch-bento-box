@@ -1077,6 +1077,87 @@ html, body, #root {
   border: 1px solid var(--separator);
 }
 
+.settings-button--done {
+  background: var(--accent, var(--text-primary));
+  color: var(--tile-bg);
+}
+
+.settings-label--sub {
+  margin-top: 14px;
+  font-size: 9px;
+  opacity: 0.75;
+}
+
+.settings-calendar-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+
+.settings-tab {
+  flex: 1;
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  padding: 7px 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--separator);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.settings-tab:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.settings-tab--active,
+.settings-tab--active:hover {
+  background: var(--text-primary);
+  color: var(--tile-bg);
+  border-color: var(--text-primary);
+}
+
+.settings-tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.settings-calendar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.settings-calendar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-calendar-item input[type="checkbox"] {
+  accent-color: var(--text-primary);
+  cursor: pointer;
+}
+
+.event-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin: 8px 0 6px;
+  min-height: 36px;
+}
+
 /* ============================================================
    ANIMATIONS
    ============================================================ */
