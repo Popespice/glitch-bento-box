@@ -7,6 +7,6 @@
 // 4. Add `http://127.0.0.1:8899/callback` to Authorized Redirect URIs
 // 5. Copy the Client ID and Client Secret here
 
-export const GOOGLE_CLIENT_ID     = 'paste-your-client-id-here'
+export const GOOGLE_CLIENT_ID = 'paste-your-client-id-here'
 export const GOOGLE_CLIENT_SECRET = 'paste-your-client-secret-here'
-export const GOOGLE_REDIRECT_URI  = 'http://127.0.0.1:8899/callback'
+export const GOOGLE_REDIRECT_URI = 'http://127.0.0.1:8899/callback'

@@ -5,8 +5,11 @@ import { sys } from '../lib/sys.js'
 
 export default function WeatherTile() {
   const [w, setW] = useState({
-    tempF: null, condition: '—', humidity: null,
-    windSpeed: null, windDir: '—',
+    tempF: null,
+    condition: '—',
+    humidity: null,
+    windSpeed: null,
+    windDir: '—',
   })
 
   useEffect(() => {
@@ -16,11 +19,18 @@ export default function WeatherTile() {
         const data = await sys.weather()
         if (cancelled) return
         // Reset to the empty shape if main returned null (no location set yet)
-        setW(data ?? {
-          tempF: null, condition: '—', humidity: null,
-          windSpeed: null, windDir: '—',
-        })
-      } catch { /* ignore */ }
+        setW(
+          data ?? {
+            tempF: null,
+            condition: '—',
+            humidity: null,
+            windSpeed: null,
+            windDir: '—',
+          }
+        )
+      } catch {
+        /* ignore */
+      }
     }
     tick()
     // Refresh every 30 min (main process caches, so this is cheap)
@@ -51,7 +61,9 @@ export default function WeatherTile() {
             <DotMatrix text={temp} />
           </div>
         ) : (
-          <span style={{ color: 'var(--text-secondary)', fontFamily: 'Space Mono', fontSize: 28 }}>—</span>
+          <span style={{ color: 'var(--text-secondary)', fontFamily: 'Space Mono', fontSize: 28 }}>
+            —
+          </span>
         )}
         <span className="tile-value-unit">°F</span>
       </div>
@@ -62,11 +74,16 @@ export default function WeatherTile() {
       )}
       <div className="tile-meta">
         {w.tempF === null ? (
-          <span className="tile-meta-line" style={{ color: 'var(--accent)' }}>CONFIGURE IN SETTINGS</span>
+          <span className="tile-meta-line" style={{ color: 'var(--accent)' }}>
+            CONFIGURE IN SETTINGS
+          </span>
         ) : (
           <>
             <span className="tile-meta-name">{w.locationName || '—'}</span>
-            <span className="tile-meta-line">{w.condition}{w.humidity !== null ? ` / ${w.humidity}%` : ''}</span>
+            <span className="tile-meta-line">
+              {w.condition}
+              {w.humidity !== null ? ` / ${w.humidity}%` : ''}
+            </span>
             <span className="tile-meta-line">
               {w.windSpeed !== null ? `WIND ${w.windDir} ${w.windSpeed} MPH` : '—'}
             </span>

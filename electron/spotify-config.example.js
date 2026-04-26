@@ -4,6 +4,6 @@
 // 2. Add `bento://callback` to the app's Redirect URIs
 // 3. Copy the Client ID and Client Secret here
 
-export const SPOTIFY_CLIENT_ID     = 'paste-your-client-id-here'
+export const SPOTIFY_CLIENT_ID = 'paste-your-client-id-here'
 export const SPOTIFY_CLIENT_SECRET = 'paste-your-client-secret-here'
-export const SPOTIFY_REDIRECT_URI  = 'bento://callback'
+export const SPOTIFY_REDIRECT_URI = 'bento://callback'

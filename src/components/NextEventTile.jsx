@@ -3,24 +3,28 @@ import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
 
-const FETCH_MS = 60 * 1000   // calendar data doesn't need to be real-time
-const TICK_MS  = 1000        // local countdown cadence
+const FETCH_MS = 60 * 1000 // calendar data doesn't need to be real-time
+const TICK_MS = 1000 // local countdown cadence
 
 export default function NextEventTile() {
-  const [status,    setStatus]    = useState('idle')   // 'event' | 'no-event' | 'disconnected' | 'error' | 'idle'
-  const [eventData, setEventData] = useState(null)     // { title, start, calendarName }
-  const [now,       setNow]       = useState(Date.now())
+  const [status, setStatus] = useState('idle') // 'event' | 'no-event' | 'disconnected' | 'error' | 'idle'
+  const [eventData, setEventData] = useState(null) // { title, start, calendarName }
+  const [now, setNow] = useState(() => Date.now())
 
   const fetchNow = async () => {
     try {
       const data = await sys.calendarNextEvent()
-      if (!data) { setStatus('error'); return }
+      if (!data) {
+        setStatus('error')
+        return
+      }
       setStatus(data.status)
-      if (data.status === 'event') setEventData({
-        title:        data.title || '',
-        start:        data.start,
-        calendarName: data.calendarName || '',
-      })
+      if (data.status === 'event')
+        setEventData({
+          title: data.title || '',
+          start: data.start,
+          calendarName: data.calendarName || '',
+        })
     } catch {
       setStatus('error')
     }
@@ -54,12 +58,19 @@ export default function NextEventTile() {
     detailText = 'RETRYING…'
   } else if (status === 'event' && eventData) {
     const remaining = Math.max(0, Math.floor((eventData.start - now) / 1000))
-    const hrs  = Math.floor(remaining / 3600)
+    const hrs = Math.floor(remaining / 3600)
     const mins = Math.floor((remaining % 3600) / 60)
     const secs = remaining % 60
-    parts = hrs > 0
-      ? [{ value: String(hrs), unit: 'H' }, { value: String(mins).padStart(2, '0'), unit: 'M' }]
-      : [{ value: String(mins), unit: 'M' }, { value: String(secs).padStart(2, '0'), unit: 'S' }]
+    parts =
+      hrs > 0
+        ? [
+            { value: String(hrs), unit: 'H' },
+            { value: String(mins).padStart(2, '0'), unit: 'M' },
+          ]
+        : [
+            { value: String(mins), unit: 'M' },
+            { value: String(secs).padStart(2, '0'), unit: 'S' },
+          ]
     nameText = eventData.title
     detailText = eventData.calendarName
   } else {

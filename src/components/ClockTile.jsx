@@ -3,8 +3,8 @@ import DotMatrix from './DotMatrix.jsx'
 import { usePolling } from '../lib/usePolling.js'
 
 const pad = (n) => String(n).padStart(2, '0')
-const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
-const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
 
 function formatTime(d) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`

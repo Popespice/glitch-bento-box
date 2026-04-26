@@ -3,10 +3,10 @@ import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
 
-const HISTORY = 32      // columns in the dot chart (newest on the right)
-const ROWS    = 8       // vertical dot rows — value 0..100 maps to 0..ROWS lit
-const SPACING = 10      // SVG units between dot centers
-const RADIUS  = 3.4     // dot radius in SVG units
+const HISTORY = 32 // columns in the dot chart (newest on the right)
+const ROWS = 8 // vertical dot rows — value 0..100 maps to 0..ROWS lit
+const SPACING = 10 // SVG units between dot centers
+const RADIUS = 3.4 // dot radius in SVG units
 
 /**
  * Bar chart rendered as a grid of dots.
@@ -29,7 +29,7 @@ function DotBarChart({ values }) {
         const litFromBottom = Math.round((clamped / 100) * ROWS)
         return Array.from({ length: ROWS }, (_, r) => {
           // r = 0 is top, r = ROWS-1 is bottom
-          const lit = (ROWS - r) <= litFromBottom
+          const lit = ROWS - r <= litFromBottom
           return (
             <circle
               key={`${c}-${r}`}
@@ -57,7 +57,9 @@ export default function SystemPulseTile() {
       setGpu(data.percent)
       setModel(data.model || 'GPU')
       setHistory((prev) => [...prev.slice(1), data.percent])
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, 2000)
 
   return (
@@ -70,7 +72,9 @@ export default function SystemPulseTile() {
         <span className="pulse-unit">%</span>
       </div>
       <DotBarChart values={history} />
-      <span className="tile-meta-line">{model.toUpperCase()} / {HISTORY} SAMPLES</span>
+      <span className="tile-meta-line">
+        {model.toUpperCase()} / {HISTORY} SAMPLES
+      </span>
     </div>
   )
 }

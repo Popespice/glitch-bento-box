@@ -41,14 +41,21 @@ export default function NetworkTile() {
       const peak = Math.max(...peakRef.current, 1)
       const intensity = Math.max(0.06, Math.min(1, n.down / peak))
       setHistory((prev) => [...prev.slice(1), intensity])
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, 2000)
 
   const downFmt = formatSpeed(down)
   const peakFmt = formatSpeed(peakDown)
   const upFmt = formatSpeed(up)
   const networkName = ssid || ip || iface
-  const typeLabel = type === 'wifi' || type === 'wireless' ? 'WIFI' : type === 'wired' ? 'ETH' : (type || iface).toUpperCase()
+  const typeLabel =
+    type === 'wifi' || type === 'wireless'
+      ? 'WIFI'
+      : type === 'wired'
+        ? 'ETH'
+        : (type || iface).toUpperCase()
 
   return (
     <div className="tile freq-tile">

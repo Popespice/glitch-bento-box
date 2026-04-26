@@ -48,7 +48,7 @@ function cellStyle(intensity) {
 }
 
 export default function HeatmapTile() {
-  const fallback = useMemo(generateFallback, [])
+  const fallback = useMemo(() => generateFallback(), [])
   const [cells, setCells] = useState(fallback)
   const [activeCount, setActiveCount] = useState(null)
   const [live, setLive] = useState(false)
@@ -56,12 +56,15 @@ export default function HeatmapTile() {
   useEffect(() => {
     let cancelled = false
     const fetchHeatmap = () => {
-      sys.githubHeatmap().then((days) => {
-        if (cancelled || !days?.length) return
-        setCells(realToIntensity(days))
-        setActiveCount(days.filter((d) => d.count > 0).length)
-        setLive(true)
-      }).catch(() => {})
+      sys
+        .githubHeatmap()
+        .then((days) => {
+          if (cancelled || !days?.length) return
+          setCells(realToIntensity(days))
+          setActiveCount(days.filter((d) => d.count > 0).length)
+          setLive(true)
+        })
+        .catch(() => {})
     }
     fetchHeatmap()
 
@@ -75,9 +78,7 @@ export default function HeatmapTile() {
     }
   }, [])
 
-  const total = live
-    ? activeCount
-    : cells.reduce((s, c) => s + (c > 0.1 ? 1 : 0), 0)
+  const total = live ? activeCount : cells.reduce((s, c) => s + (c > 0.1 ? 1 : 0), 0)
 
   return (
     <div className="tile heatmap-tile">
@@ -87,7 +88,9 @@ export default function HeatmapTile() {
           <div key={i} className="heatmap-cell" style={cellStyle(c)} />
         ))}
       </div>
-      <span className="tile-meta-line">{total ?? '—'} ACTIVE / {WEEKS * DAYS} DAYS</span>
+      <span className="tile-meta-line">
+        {total ?? '—'} ACTIVE / {WEEKS * DAYS} DAYS
+      </span>
     </div>
   )
 }

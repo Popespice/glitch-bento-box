@@ -10,15 +10,21 @@ import { useEffect, useRef } from 'react'
  */
 export function usePolling(callback, intervalMs) {
   const cbRef = useRef(callback)
-  cbRef.current = callback   // always invoke the latest closure
+  // Keep the ref current so the interval always calls the latest closure
+  // without creating a dependency on `callback` in the interval effect.
+  useEffect(() => {
+    cbRef.current = callback
+  })
 
   useEffect(() => {
     let id = null
-    const tick = () => { cbRef.current() }
+    const tick = () => {
+      cbRef.current()
+    }
 
     const start = () => {
       if (id != null) return
-      tick()                                    // immediate
+      tick() // immediate
       id = setInterval(tick, intervalMs)
     }
     const stop = () => {
@@ -29,7 +35,9 @@ export function usePolling(callback, intervalMs) {
 
     if (!document.hidden) start()
 
-    const onVis = () => { document.hidden ? stop() : start() }
+    const onVis = () => {
+      document.hidden ? stop() : start()
+    }
     document.addEventListener('visibilitychange', onVis)
 
     return () => {

@@ -10,7 +10,9 @@ export default function MemoryTile() {
     try {
       const next = await sys.memory()
       setM(next)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, 5000)
 
   return (
@@ -26,7 +28,9 @@ export default function MemoryTile() {
       <div className="mem-bar-track">
         <div className="mem-bar-fill" style={{ width: `${m.pct}%` }} />
       </div>
-      <span className="mem-swap">SWAP {m.swapGB.toFixed(1)} GB / {m.pct}% UTILIZED</span>
+      <span className="mem-swap">
+        SWAP {m.swapGB.toFixed(1)} GB / {m.pct}% UTILIZED
+      </span>
     </div>
   )
 }

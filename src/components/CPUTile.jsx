@@ -16,7 +16,9 @@ export default function CPUTile() {
       setCpu(percent)
       setMeta({ speedGhz, brand })
       setHistory((prev) => [...prev.slice(1), percent])
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, 2000)
 
   const points = history

@@ -22,39 +22,52 @@ function fmtTimer(sec) {
 
 export default function GlyphTile() {
   const [uptime, setUptime] = useState(null)
-  const [disk,   setDisk]   = useState(null)
+  const [disk, setDisk] = useState(null)
 
-  const [duration,  setDuration]  = useState(25)
+  const [duration, setDuration] = useState(25)
   const [remaining, setRemaining] = useState(25 * 60)
-  const [running,   setRunning]   = useState(false)
-  const [done,      setDone]      = useState(false)
-  const tickRef  = useRef(null)
-  const doneRef  = useRef(null)
+  const [running, setRunning] = useState(false)
+  const [done, setDone] = useState(false)
+  const tickRef = useRef(null)
+  const doneRef = useRef(null)
 
   // Uptime — update every 60s, paused when window hidden
   usePolling(async () => {
-    try { const t = await sys.uptime(); if (t) setUptime(t.uptime) } catch {}
+    try {
+      const t = await sys.uptime()
+      if (t) setUptime(t.uptime)
+    } catch {
+      /* best-effort */
+    }
   }, 60_000)
 
   // Disk — update every 30s, paused when window hidden
   usePolling(async () => {
-    try { const d = await sys.disk(); if (d) setDisk(d) } catch {}
+    try {
+      const d = await sys.disk()
+      if (d) setDisk(d)
+    } catch {
+      /* best-effort */
+    }
   }, 30_000)
 
   // Load saved pomodoro duration on mount
   useEffect(() => {
-    sys.settingsGet().then(s => {
-      const mins = s?.pomodoro?.minutes ?? 25
-      setDuration(mins)
-      setRemaining(mins * 60)
-    }).catch(() => {})
+    sys
+      .settingsGet()
+      .then((s) => {
+        const mins = s?.pomodoro?.minutes ?? 25
+        setDuration(mins)
+        setRemaining(mins * 60)
+      })
+      .catch(() => {})
   }, [])
 
   // Countdown tick
   useEffect(() => {
     if (!running) return
     tickRef.current = setInterval(() => {
-      setRemaining(r => {
+      setRemaining((r) => {
         if (r <= 1) {
           clearInterval(tickRef.current)
           setRunning(false)
@@ -96,11 +109,10 @@ export default function GlyphTile() {
   }
 
   const activeSegs = disk ? Math.round((disk.pct / 100) * DISK_SEGS) : 0
-  const isPaused   = !running && !done && remaining < duration * 60
+  const isPaused = !running && !done && remaining < duration * 60
 
   return (
     <div className="tile glyph-tile">
-
       {/* ── UPTIME ── */}
       <span className="tile-label">UPTIME</span>
       <div className="glyph-row">
@@ -131,33 +143,45 @@ export default function GlyphTile() {
         </div>
       </div>
       <div className="glyph-timer-controls">
-
         {/* DONE — dismiss only */}
         {done && (
-          <button className="glyph-btn" onClick={reset} aria-label="Dismiss">✕</button>
+          <button className="glyph-btn" onClick={reset} aria-label="Dismiss">
+            ✕
+          </button>
         )}
 
         {/* RUNNING — pause + cancel */}
         {running && (
           <>
-            <button className="glyph-btn" onClick={toggle} aria-label="Pause">■</button>
-            <button className="glyph-btn glyph-btn--sm" onClick={reset} aria-label="Cancel">✕</button>
+            <button className="glyph-btn" onClick={toggle} aria-label="Pause">
+              ■
+            </button>
+            <button className="glyph-btn glyph-btn--sm" onClick={reset} aria-label="Cancel">
+              ✕
+            </button>
           </>
         )}
 
         {/* IDLE — start + adjust (+ reset if paused mid-run) */}
         {!running && !done && (
           <>
-            <button className="glyph-btn" onClick={toggle} aria-label="Start">▶</button>
-            <button className="glyph-btn glyph-btn--sm" onClick={() => adjust(-5)}>-5</button>
+            <button className="glyph-btn" onClick={toggle} aria-label="Start">
+              ▶
+            </button>
+            <button className="glyph-btn glyph-btn--sm" onClick={() => adjust(-5)}>
+              -5
+            </button>
             <span className="glyph-timer-label">{duration}M</span>
-            <button className="glyph-btn glyph-btn--sm" onClick={() => adjust(5)}>+5</button>
+            <button className="glyph-btn glyph-btn--sm" onClick={() => adjust(5)}>
+              +5
+            </button>
             {isPaused && (
-              <button className="glyph-btn glyph-btn--sm" onClick={reset} aria-label="Reset">✕</button>
+              <button className="glyph-btn glyph-btn--sm" onClick={reset} aria-label="Reset">
+                ✕
+              </button>
             )}
           </>
         )}
-
       </div>
     </div>
   )

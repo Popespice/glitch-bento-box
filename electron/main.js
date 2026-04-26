@@ -9,7 +9,11 @@ import crypto from 'node:crypto'
 import si from 'systeminformation'
 import Store from 'electron-store'
 import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI } from './spotify-config.js'
-import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } from './google-calendar-config.js'
+import {
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI,
+} from './google-calendar-config.js'
 import { createDAVClient } from 'tsdav'
 import nodeIcal from 'node-ical'
 
@@ -59,23 +63,23 @@ const store = new Store({
     // generates at appleid.apple.com). Google stores only the refresh token +
     // email needed to construct the CalDAV URL. No event data is ever persisted.
     calendar: {
-      provider:           null,   // 'icloud' | 'google' | null
-      icloudUsername:     '',
-      icloudAppPassword:  '',
+      provider: null, // 'icloud' | 'google' | null
+      icloudUsername: '',
+      icloudAppPassword: '',
       googleRefreshToken: null,
-      googleEmail:        '',
-      activeCalendarIds:  [],     // calendar URLs the user opted into
+      googleEmail: '',
+      activeCalendarIds: [], // calendar URLs the user opted into
     },
   },
 })
 
 // In-memory only — never persisted, dies when the process exits.
-let _spotifyAccess      = null   // { token: string, expiresAt: number (ms epoch) }
-let _pendingConnect     = null   // { resolve, reject, state, timeoutId } during Spotify OAuth flow
-let _googleAccess       = null   // { token: string, expiresAt: number }
-let _pendingGCalConnect = null   // { resolve, reject, state, timeoutId } during Google OAuth flow
-let _caffeinateProc     = null   // ChildProcess | null — caffeinate -d background process
-let _btHelperPath       = null   // string | null — path to compiled Swift BT helper binary
+let _spotifyAccess = null // { token: string, expiresAt: number (ms epoch) }
+let _pendingConnect = null // { resolve, reject, state, timeoutId } during Spotify OAuth flow
+let _googleAccess = null // { token: string, expiresAt: number }
+let _pendingGCalConnect = null // { resolve, reject, state, timeoutId } during Google OAuth flow
+let _caffeinateProc = null // ChildProcess | null — caffeinate -d background process
+let _btHelperPath = null // string | null — path to compiled Swift BT helper binary
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
@@ -151,7 +155,7 @@ app.on('second-instance', (_event, argv) => {
 
 // ---------- Window controls (custom traffic lights) ----------
 
-ipcMain.on('win:close',    () => mainWindow?.close())
+ipcMain.on('win:close', () => mainWindow?.close())
 ipcMain.on('win:minimize', () => mainWindow?.minimize())
 ipcMain.on('win:maximize', () => {
   if (!mainWindow) return
@@ -205,15 +209,16 @@ ipcMain.handle('sys:gpu', async () => {
           model: await getGpuModel(),
         }
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
   }
 
   // Cross-platform fallback — works on some Windows/NVIDIA/AMD drivers, often 0 on Linux.
   try {
     const g = await si.graphics()
     const ctrl =
-      g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ??
-      g.controllers?.[0]
+      g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ?? g.controllers?.[0]
     return {
       percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
       model: ctrl?.model || ctrl?.name || 'GPU',
@@ -227,8 +232,8 @@ ipcMain.handle('sys:memory', async () => {
   const m = await si.mem()
   return {
     totalGB: Number((m.total / 1e9).toFixed(1)),
-    usedGB:  Number(((m.total - m.available) / 1e9).toFixed(1)),
-    swapGB:  Number((m.swapused / 1e9).toFixed(1)),
+    usedGB: Number(((m.total - m.available) / 1e9).toFixed(1)),
+    swapGB: Number((m.swapused / 1e9).toFixed(1)),
     pct: Math.round(((m.total - m.available) / m.total) * 100),
   }
 })
@@ -249,18 +254,16 @@ ipcMain.handle('sys:network', async () => {
   if (!primary) return { down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null }
 
   const wifiConn = wifi.find((w) => w.iface === primary.iface) ?? wifi[0]
-  const ifaceInfo = Array.isArray(ifaces)
-    ? ifaces.find((i) => i.iface === primary.iface)
-    : ifaces
+  const ifaceInfo = Array.isArray(ifaces) ? ifaces.find((i) => i.iface === primary.iface) : ifaces
   const isWifi = !!wifiConn || ifaceInfo?.type === 'wireless'
 
   return {
     down: Math.max(0, primary.rx_sec ?? 0),
-    up:   Math.max(0, primary.tx_sec ?? 0),
+    up: Math.max(0, primary.tx_sec ?? 0),
     iface: primary.iface,
     ssid: normalizeSsid(wifiConn?.ssid),
     type: isWifi ? 'wifi' : 'wired',
-    ip:   ifaceInfo?.ip4 ?? null,
+    ip: ifaceInfo?.ip4 ?? null,
     signalQuality: wifiConn?.quality ?? null,
   }
 })
@@ -268,28 +271,28 @@ ipcMain.handle('sys:network', async () => {
 ipcMain.handle('sys:battery', async () => {
   const b = await si.battery()
   return {
-    hasBattery:    b.hasBattery,
-    percent:       b.percent,
-    isCharging:    b.isCharging,
-    acConnected:   b.acConnected,
-    timeRemaining: b.timeRemaining ?? -1,  // minutes, -1 = unknown/charging
+    hasBattery: b.hasBattery,
+    percent: b.percent,
+    isCharging: b.isCharging,
+    acConnected: b.acConnected,
+    timeRemaining: b.timeRemaining ?? -1, // minutes, -1 = unknown/charging
   }
 })
 
 ipcMain.handle('sys:uptime', async () => {
   const t = await si.time()
-  return { uptime: t.uptime }   // seconds since boot
+  return { uptime: t.uptime } // seconds since boot
 })
 
 ipcMain.handle('sys:disk', async () => {
   const disks = await si.fsSize()
-  const main = disks.find(d => d.mount === '/') ?? disks[0]
+  const main = disks.find((d) => d.mount === '/') ?? disks[0]
   if (!main) return null
   return {
     totalGB: Number((main.size / 1e9).toFixed(1)),
-    usedGB:  Number((main.used / 1e9).toFixed(1)),
-    freeGB:  Number(((main.size - main.used) / 1e9).toFixed(1)),
-    pct:     Math.round(main.use),
+    usedGB: Number((main.used / 1e9).toFixed(1)),
+    freeGB: Number(((main.size - main.used) / 1e9).toFixed(1)),
+    pct: Math.round(main.use),
   }
 })
 
@@ -325,7 +328,10 @@ ipcMain.handle('sys:last-command', () => {
   for (const { path: histPath, shell, extended } of candidates) {
     try {
       const text = tailFile(histPath)
-      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+      const lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
 
       let command = null
       if (extended) {
@@ -333,7 +339,10 @@ ipcMain.handle('sys:last-command', () => {
         // ': timestamp:elapsed;command'. Plain entries look like normal commands.
         for (let i = lines.length - 1; i >= 0; i--) {
           const ext = lines[i].match(/^: \d+:\d+;(.+)/)
-          if (ext) { command = ext[1]; break }
+          if (ext) {
+            command = ext[1]
+            break
+          }
         }
         // If no extended entries found, treat as plain
         if (!command && lines.length) command = lines[lines.length - 1]
@@ -346,7 +355,7 @@ ipcMain.handle('sys:last-command', () => {
       const verb = trimmed.split(/\s+/)[0].toUpperCase()
       // Some verbs may contain non-alpha chars (e.g. './foo', '~/script') — strip
       // anything DotMatrix can't render to keep the verb clean. Letters/digits/dash only.
-      const cleanVerb = verb.replace(/[^A-Z0-9\-]/g, '') || 'CMD'
+      const cleanVerb = verb.replace(/[^A-Z0-9-]/g, '') || 'CMD'
       return { verb: cleanVerb, full: trimmed, shell }
     } catch {
       // file not found or unreadable — try next candidate
@@ -358,18 +367,51 @@ ipcMain.handle('sys:last-command', () => {
 // ---------- Weather (Open-Meteo, no API key) ----------
 
 const WMO_DESCRIPTIONS = {
-  0: 'CLEAR SKY', 1: 'MAINLY CLEAR', 2: 'PARTLY CLOUDY', 3: 'OVERCAST',
-  45: 'FOGGY', 48: 'FREEZING FOG',
-  51: 'LIGHT DRIZZLE', 53: 'DRIZZLE', 55: 'HEAVY DRIZZLE',
-  61: 'LIGHT RAIN', 63: 'RAIN', 65: 'HEAVY RAIN',
-  71: 'LIGHT SNOW', 73: 'SNOW', 75: 'HEAVY SNOW', 77: 'SNOW GRAINS',
-  80: 'RAIN SHOWERS', 81: 'RAIN SHOWERS', 82: 'VIOLENT SHOWERS',
-  85: 'SNOW SHOWERS', 86: 'HEAVY SNOW SHOWERS',
-  95: 'THUNDERSTORM', 96: 'THUNDERSTORM', 99: 'THUNDERSTORM',
+  0: 'CLEAR SKY',
+  1: 'MAINLY CLEAR',
+  2: 'PARTLY CLOUDY',
+  3: 'OVERCAST',
+  45: 'FOGGY',
+  48: 'FREEZING FOG',
+  51: 'LIGHT DRIZZLE',
+  53: 'DRIZZLE',
+  55: 'HEAVY DRIZZLE',
+  61: 'LIGHT RAIN',
+  63: 'RAIN',
+  65: 'HEAVY RAIN',
+  71: 'LIGHT SNOW',
+  73: 'SNOW',
+  75: 'HEAVY SNOW',
+  77: 'SNOW GRAINS',
+  80: 'RAIN SHOWERS',
+  81: 'RAIN SHOWERS',
+  82: 'VIOLENT SHOWERS',
+  85: 'SNOW SHOWERS',
+  86: 'HEAVY SNOW SHOWERS',
+  95: 'THUNDERSTORM',
+  96: 'THUNDERSTORM',
+  99: 'THUNDERSTORM',
 }
 
 function degreesToCardinal(deg) {
-  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW']
+  const dirs = [
+    'N',
+    'NNE',
+    'NE',
+    'ENE',
+    'E',
+    'ESE',
+    'SE',
+    'SSE',
+    'S',
+    'SSW',
+    'SW',
+    'WSW',
+    'W',
+    'WNW',
+    'NW',
+    'NNW',
+  ]
   return dirs[Math.round(deg / 22.5) % 16]
 }
 
@@ -380,13 +422,14 @@ const WEATHER_TTL = 30 * 60 * 1000 // 30 min
 ipcMain.handle('sys:weather', async () => {
   const lat = store.get('weather.lat')
   const lon = store.get('weather.lon')
-  if (lat == null || lon == null) return null   // not configured yet
+  if (lat == null || lon == null) return null // not configured yet
 
   if (_weatherCache && Date.now() - _weatherFetchedAt < WEATHER_TTL) {
     return _weatherCache
   }
   try {
-    const url = `https://api.open-meteo.com/v1/forecast` +
+    const url =
+      `https://api.open-meteo.com/v1/forecast` +
       `?latitude=${lat}&longitude=${lon}` +
       `&current=temperature_2m,weathercode,windspeed_10m,winddirection_10m,relativehumidity_2m` +
       `&temperature_unit=fahrenheit&windspeed_unit=mph&wind_speed_unit=mph`
@@ -394,11 +437,11 @@ ipcMain.handle('sys:weather', async () => {
     const json = await res.json()
     const c = json.current
     _weatherCache = {
-      tempF:       Math.round(c.temperature_2m),
-      condition:   WMO_DESCRIPTIONS[c.weathercode] ?? 'UNKNOWN',
-      humidity:    c.relativehumidity_2m,
-      windSpeed:   Math.round(c.windspeed_10m),
-      windDir:     degreesToCardinal(c.winddirection_10m),
+      tempF: Math.round(c.temperature_2m),
+      condition: WMO_DESCRIPTIONS[c.weathercode] ?? 'UNKNOWN',
+      humidity: c.relativehumidity_2m,
+      windSpeed: Math.round(c.windspeed_10m),
+      windDir: degreesToCardinal(c.winddirection_10m),
       locationName: store.get('weather.locationName') || '',
     }
     _weatherFetchedAt = Date.now()
@@ -413,7 +456,7 @@ ipcMain.handle('sys:weather', async () => {
 
 ipcMain.handle('settings:get', () => ({
   weather: store.get('weather'),
-  github:  store.get('github'),
+  github: store.get('github'),
   // Privacy: only return a boolean, never the token itself.
   spotify: { connected: !!store.get('spotify.refreshToken') },
 }))
@@ -422,11 +465,11 @@ ipcMain.handle('settings:set', (_event, key, value) => {
   store.set(key, value)
   // Invalidate relevant caches so the next poll picks up new values
   if (key.startsWith('weather')) {
-    _weatherCache    = null
+    _weatherCache = null
     _weatherFetchedAt = 0
   }
   if (key.startsWith('github')) {
-    _heatmapCache    = null
+    _heatmapCache = null
     _heatmapFetchedAt = 0
   }
   return true
@@ -434,7 +477,8 @@ ipcMain.handle('settings:set', (_event, key, value) => {
 
 ipcMain.handle('settings:geocode', async (_event, query) => {
   try {
-    const url = `https://geocoding-api.open-meteo.com/v1/search` +
+    const url =
+      `https://geocoding-api.open-meteo.com/v1/search` +
       `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
     const res = await fetch(url)
     const json = await res.json()
@@ -442,8 +486,8 @@ ipcMain.handle('settings:geocode', async (_event, query) => {
     if (!r) return null
     const parts = [r.name, r.admin1, r.country_code].filter(Boolean)
     return {
-      lat:          r.latitude,
-      lon:          r.longitude,
+      lat: r.latitude,
+      lon: r.longitude,
       locationName: parts.join(', '),
     }
   } catch (err) {
@@ -536,19 +580,19 @@ ipcMain.handle('sys:github-heatmap', async () => {
 // + display name + everything else stays in main-process memory or is never
 // requested at all. See store defaults at the top of this file.
 
-const SPOTIFY_BASIC_AUTH = Buffer
-  .from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`)
-  .toString('base64')
+const SPOTIFY_BASIC_AUTH = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString(
+  'base64'
+)
 
 const SPOTIFY_SCOPE = 'user-read-currently-playing user-read-playback-state'
-const CONNECT_TIMEOUT_MS = 5 * 60 * 1000   // 5 minutes — abandon if user wanders off
+const CONNECT_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes — abandon if user wanders off
 
 async function exchangeSpotifyToken(params) {
   const res = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: {
-      'Authorization':  `Basic ${SPOTIFY_BASIC_AUTH}`,
-      'Content-Type':   'application/x-www-form-urlencoded',
+      Authorization: `Basic ${SPOTIFY_BASIC_AUTH}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams(params).toString(),
   })
@@ -574,7 +618,7 @@ async function getValidAccessToken() {
   let payload
   try {
     payload = await exchangeSpotifyToken({
-      grant_type:    'refresh_token',
+      grant_type: 'refresh_token',
       refresh_token: refreshToken,
     })
   } catch (err) {
@@ -583,8 +627,8 @@ async function getValidAccessToken() {
   }
 
   _spotifyAccess = {
-    token:     payload.access_token,
-    expiresAt: Date.now() + (payload.expires_in * 1000),
+    token: payload.access_token,
+    expiresAt: Date.now() + payload.expires_in * 1000,
   }
   // Spotify occasionally returns a new refresh token; rotate if so.
   if (payload.refresh_token && payload.refresh_token !== refreshToken) {
@@ -599,7 +643,7 @@ function clearPendingConnect() {
 }
 
 async function handleSpotifyCallback(url) {
-  if (!_pendingConnect) return  // stale or unsolicited — ignore silently
+  if (!_pendingConnect) return // stale or unsolicited — ignore silently
 
   let parsed
   try {
@@ -610,7 +654,7 @@ async function handleSpotifyCallback(url) {
     return
   }
 
-  const code  = parsed.searchParams.get('code')
+  const code = parsed.searchParams.get('code')
   const state = parsed.searchParams.get('state')
   const error = parsed.searchParams.get('error')
 
@@ -638,15 +682,15 @@ async function handleSpotifyCallback(url) {
 
   try {
     const payload = await exchangeSpotifyToken({
-      grant_type:   'authorization_code',
+      grant_type: 'authorization_code',
       code,
       redirect_uri: SPOTIFY_REDIRECT_URI,
     })
     // Persist ONLY the refresh token. Access token + expiry stay in memory.
     store.set('spotify.refreshToken', payload.refresh_token)
     _spotifyAccess = {
-      token:     payload.access_token,
-      expiresAt: Date.now() + (payload.expires_in * 1000),
+      token: payload.access_token,
+      expiresAt: Date.now() + payload.expires_in * 1000,
     }
     _pendingConnect.resolve({ ok: true })
   } catch (err) {
@@ -664,23 +708,23 @@ ipcMain.handle('spotify:connect', async () => {
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL('https://accounts.spotify.com/authorize')
   authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('client_id',     SPOTIFY_CLIENT_ID)
-  authUrl.searchParams.set('redirect_uri',  SPOTIFY_REDIRECT_URI)
-  authUrl.searchParams.set('scope',         SPOTIFY_SCOPE)
-  authUrl.searchParams.set('state',         state)
-  authUrl.searchParams.set('show_dialog',   'true')
+  authUrl.searchParams.set('client_id', SPOTIFY_CLIENT_ID)
+  authUrl.searchParams.set('redirect_uri', SPOTIFY_REDIRECT_URI)
+  authUrl.searchParams.set('scope', SPOTIFY_SCOPE)
+  authUrl.searchParams.set('state', state)
+  authUrl.searchParams.set('show_dialog', 'true')
 
   return new Promise((resolve, reject) => {
     // Open a dedicated auth window so Electron intercepts the bento:// redirect
     // directly via will-redirect / will-navigate — no OS protocol routing needed.
     const authWin = new BrowserWindow({
-      width:  480,
+      width: 480,
       height: 700,
-      title:  'Connect Spotify',
+      title: 'Connect Spotify',
       webPreferences: {
-        nodeIntegration:  false,
+        nodeIntegration: false,
         contextIsolation: true,
-        sandbox:          true,
+        sandbox: true,
       },
     })
 
@@ -700,11 +744,11 @@ ipcMain.handle('spotify:connect', async () => {
     const interceptRedirect = (_event, url) => {
       if (!url.startsWith('bento://')) return
       _event.preventDefault()
-      handleSpotifyCallback(url)   // resolves / rejects _pendingConnect
+      handleSpotifyCallback(url) // resolves / rejects _pendingConnect
       if (!authWin.isDestroyed()) authWin.close()
     }
     authWin.webContents.on('will-redirect', interceptRedirect)
-    authWin.webContents.on('will-navigate',  interceptRedirect)
+    authWin.webContents.on('will-navigate', interceptRedirect)
 
     // User closed the window without completing auth.
     authWin.on('closed', () => {
@@ -714,7 +758,7 @@ ipcMain.handle('spotify:connect', async () => {
     authWin.loadURL(authUrl.toString())
   }).then(
     (result) => result,
-    (err)    => ({ ok: false, error: err.message }),
+    (err) => ({ ok: false, error: err.message })
   )
 })
 
@@ -747,8 +791,8 @@ ipcMain.handle('sys:now-playing', async () => {
     return { status: 'error' }
   }
 
-  if (res.status === 204) return { status: 'idle' }    // nothing playing
-  if (!res.ok)            return { status: 'error' }
+  if (res.status === 204) return { status: 'idle' } // nothing playing
+  if (!res.ok) return { status: 'error' }
 
   let data
   try {
@@ -761,11 +805,11 @@ ipcMain.handle('sys:now-playing', async () => {
   // Map ONLY the four fields the tile needs. Ignore the rest of the payload —
   // defense-in-depth so we don't accidentally surface or store user metadata.
   return {
-    status:    'playing',
+    status: 'playing',
     isPlaying: !!data.is_playing,
     track: {
-      name:     data.item.name,
-      artist:   (data.item.artists ?? []).map((a) => a.name).join(' / '),
+      name: data.item.name,
+      artist: (data.item.artists ?? []).map((a) => a.name).join(' / '),
       duration: Math.floor((data.item.duration_ms ?? 0) / 1000),
     },
     position: Math.floor((data.progress_ms ?? 0) / 1000),
@@ -785,11 +829,12 @@ ipcMain.handle('sys:now-playing', async () => {
 
 const ICLOUD_SERVER_URL = 'https://caldav.icloud.com'
 const GOOGLE_SERVER_URL = 'https://apidata.googleusercontent.com/caldav/v2/'
-const GOOGLE_TOKEN_URL  = 'https://oauth2.googleapis.com/token'
-const GOOGLE_AUTH_URL   = 'https://accounts.google.com/o/oauth2/v2/auth'
-const GOOGLE_USERINFO   = 'https://www.googleapis.com/oauth2/v2/userinfo'
-const GOOGLE_SCOPE      = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email'
-const EVENT_LOOKAHEAD_MS = 14 * 24 * 60 * 60 * 1000   // 14 days
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
+const GOOGLE_USERINFO = 'https://www.googleapis.com/oauth2/v2/userinfo'
+const GOOGLE_SCOPE =
+  'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email'
+const EVENT_LOOKAHEAD_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
 
 function clearPendingGCalConnect() {
   if (_pendingGCalConnect?.timeoutId) clearTimeout(_pendingGCalConnect.timeoutId)
@@ -801,7 +846,7 @@ async function exchangeGoogleToken(params) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id:     GOOGLE_CLIENT_ID,
+      client_id: GOOGLE_CLIENT_ID,
       client_secret: GOOGLE_CLIENT_SECRET,
       ...params,
     }).toString(),
@@ -823,7 +868,7 @@ async function getValidGoogleAccessToken() {
   let payload
   try {
     payload = await exchangeGoogleToken({
-      grant_type:    'refresh_token',
+      grant_type: 'refresh_token',
       refresh_token: refreshToken,
     })
   } catch (err) {
@@ -831,8 +876,8 @@ async function getValidGoogleAccessToken() {
     throw new Error('REFRESH_FAILED')
   }
   _googleAccess = {
-    token:     payload.access_token,
-    expiresAt: Date.now() + (payload.expires_in * 1000),
+    token: payload.access_token,
+    expiresAt: Date.now() + payload.expires_in * 1000,
   }
   // Google occasionally rotates refresh tokens; persist if returned.
   if (payload.refresh_token) {
@@ -846,9 +891,9 @@ async function buildIcloudClient() {
   const password = store.get('calendar.icloudAppPassword')
   if (!username || !password) throw new Error('NO_CREDS')
   return createDAVClient({
-    serverUrl:          ICLOUD_SERVER_URL,
-    credentials:        { username, password },
-    authMethod:         'Basic',
+    serverUrl: ICLOUD_SERVER_URL,
+    credentials: { username, password },
+    authMethod: 'Basic',
     defaultAccountType: 'caldav',
   })
 }
@@ -860,15 +905,15 @@ async function buildGoogleClient() {
   // Verify token works (will throw NO_REFRESH_TOKEN / REFRESH_FAILED on issues)
   await getValidGoogleAccessToken()
   return createDAVClient({
-    serverUrl:   GOOGLE_SERVER_URL,
+    serverUrl: GOOGLE_SERVER_URL,
     credentials: {
-      tokenUrl:     GOOGLE_TOKEN_URL,
+      tokenUrl: GOOGLE_TOKEN_URL,
       username,
       refreshToken,
-      clientId:     GOOGLE_CLIENT_ID,
+      clientId: GOOGLE_CLIENT_ID,
       clientSecret: GOOGLE_CLIENT_SECRET,
     },
-    authMethod:         'Oauth',
+    authMethod: 'Oauth',
     defaultAccountType: 'caldav',
   })
 }
@@ -898,18 +943,18 @@ ipcMain.handle('calendar:connect-icloud', async (_event, username, appPassword) 
   }
   try {
     const client = await createDAVClient({
-      serverUrl:          ICLOUD_SERVER_URL,
-      credentials:        { username, password: appPassword },
-      authMethod:         'Basic',
+      serverUrl: ICLOUD_SERVER_URL,
+      credentials: { username, password: appPassword },
+      authMethod: 'Basic',
       defaultAccountType: 'caldav',
     })
     const cals = await client.fetchCalendars()
     // Persist only after we've verified it actually works
-    store.set('calendar.provider',          'icloud')
-    store.set('calendar.icloudUsername',    username)
+    store.set('calendar.provider', 'icloud')
+    store.set('calendar.icloudUsername', username)
     store.set('calendar.icloudAppPassword', appPassword)
     store.set('calendar.googleRefreshToken', null)
-    store.set('calendar.googleEmail',        '')
+    store.set('calendar.googleEmail', '')
     return { ok: true, calendars: cals.map(mapCalendar) }
   } catch (err) {
     console.error('[calendar/icloud] connect failed:', err?.message || err)
@@ -923,16 +968,18 @@ ipcMain.handle('calendar:connect-google', async () => {
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL(GOOGLE_AUTH_URL)
   authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('client_id',     GOOGLE_CLIENT_ID)
-  authUrl.searchParams.set('redirect_uri',  GOOGLE_REDIRECT_URI)
-  authUrl.searchParams.set('scope',         GOOGLE_SCOPE)
-  authUrl.searchParams.set('access_type',   'offline')   // we need refresh_token
-  authUrl.searchParams.set('prompt',        'consent')   // force consent so refresh_token is always returned
-  authUrl.searchParams.set('state',         state)
+  authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID)
+  authUrl.searchParams.set('redirect_uri', GOOGLE_REDIRECT_URI)
+  authUrl.searchParams.set('scope', GOOGLE_SCOPE)
+  authUrl.searchParams.set('access_type', 'offline') // we need refresh_token
+  authUrl.searchParams.set('prompt', 'consent') // force consent so refresh_token is always returned
+  authUrl.searchParams.set('state', state)
 
   return new Promise((resolve, reject) => {
     const authWin = new BrowserWindow({
-      width: 480, height: 700, title: 'Connect Google Calendar',
+      width: 480,
+      height: 700,
+      title: 'Connect Google Calendar',
       webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
     })
 
@@ -942,9 +989,12 @@ ipcMain.handle('calendar:connect-google', async () => {
       if (err) reject(err)
     }
 
-    const timeoutId = setTimeout(() => {
-      cleanup(new Error('Connect timed out — window closed?'))
-    }, 5 * 60 * 1000)
+    const timeoutId = setTimeout(
+      () => {
+        cleanup(new Error('Connect timed out — window closed?'))
+      },
+      5 * 60 * 1000
+    )
 
     _pendingGCalConnect = { resolve, reject, state, timeoutId }
 
@@ -953,7 +1003,7 @@ ipcMain.handle('calendar:connect-google', async () => {
       event.preventDefault()
       try {
         const parsed = new URL(url)
-        const code  = parsed.searchParams.get('code')
+        const code = parsed.searchParams.get('code')
         const error = parsed.searchParams.get('error')
         const cbState = parsed.searchParams.get('state')
 
@@ -962,7 +1012,7 @@ ipcMain.handle('calendar:connect-google', async () => {
         if (!code) throw new Error('No authorization code returned')
 
         const tokenPayload = await exchangeGoogleToken({
-          grant_type:   'authorization_code',
+          grant_type: 'authorization_code',
           code,
           redirect_uri: GOOGLE_REDIRECT_URI,
         })
@@ -976,14 +1026,14 @@ ipcMain.handle('calendar:connect-google', async () => {
         if (!userinfo.email) throw new Error('Google did not return an email')
 
         // Persist ONLY refresh token + email; access token in memory only.
-        store.set('calendar.provider',           'google')
+        store.set('calendar.provider', 'google')
         store.set('calendar.googleRefreshToken', tokenPayload.refresh_token)
-        store.set('calendar.googleEmail',        userinfo.email)
-        store.set('calendar.icloudUsername',     '')
-        store.set('calendar.icloudAppPassword',  '')
+        store.set('calendar.googleEmail', userinfo.email)
+        store.set('calendar.icloudUsername', '')
+        store.set('calendar.icloudAppPassword', '')
         _googleAccess = {
-          token:     tokenPayload.access_token,
-          expiresAt: Date.now() + (tokenPayload.expires_in * 1000),
+          token: tokenPayload.access_token,
+          expiresAt: Date.now() + tokenPayload.expires_in * 1000,
         }
 
         // Fetch calendar list now so the renderer can show the picker.
@@ -1027,12 +1077,12 @@ ipcMain.handle('calendar:set-active-calendars', (_event, ids) => {
 })
 
 ipcMain.handle('calendar:disconnect', () => {
-  store.set('calendar.provider',           null)
-  store.set('calendar.icloudUsername',     '')
-  store.set('calendar.icloudAppPassword',  '')
+  store.set('calendar.provider', null)
+  store.set('calendar.icloudUsername', '')
+  store.set('calendar.icloudAppPassword', '')
   store.set('calendar.googleRefreshToken', null)
-  store.set('calendar.googleEmail',        '')
-  store.set('calendar.activeCalendarIds',  [])
+  store.set('calendar.googleEmail', '')
+  store.set('calendar.activeCalendarIds', [])
   _googleAccess = null
   return { ok: true }
 })
@@ -1041,10 +1091,11 @@ ipcMain.handle('calendar:disconnect', () => {
 function mapCalendar(cal) {
   // tsdav calendar shape: { url, displayName, ctag, calendarColor, components, ... }
   return {
-    id:    cal.url,
-    name:  typeof cal.displayName === 'string'
-             ? cal.displayName
-             : (cal.displayName?._cdata || cal.displayName?.['#text'] || 'Untitled'),
+    id: cal.url,
+    name:
+      typeof cal.displayName === 'string'
+        ? cal.displayName
+        : cal.displayName?._cdata || cal.displayName?.['#text'] || 'Untitled',
     color: cal.calendarColor || null,
   }
 }
@@ -1088,7 +1139,7 @@ function extractFutureEvents(rawICS, calendarName, lookaheadMs) {
 ipcMain.handle('sys:calendar-next-event', async () => {
   let provider, client
   try {
-    ({ provider, client } = await buildActiveClient())
+    ;({ provider, client } = await buildActiveClient())
   } catch (err) {
     if (err.message === 'REFRESH_FAILED') {
       // Google refresh token revoked — wipe so the UI prompts reconnect.
@@ -1107,9 +1158,7 @@ ipcMain.handle('sys:calendar-next-event', async () => {
   }
 
   const activeIds = store.get('calendar.activeCalendarIds') || []
-  const targets = activeIds.length
-    ? cals.filter((c) => activeIds.includes(c.url))
-    : cals
+  const targets = activeIds.length ? cals.filter((c) => activeIds.includes(c.url)) : cals
   if (targets.length === 0) return { status: 'no-event' }
 
   const now = Date.now()
@@ -1117,27 +1166,29 @@ ipcMain.handle('sys:calendar-next-event', async () => {
 
   // Fan out across calendars; collect candidate events, pick the soonest.
   const allEvents = []
-  await Promise.all(targets.map(async (cal) => {
-    try {
-      const objects = await client.fetchCalendarObjects({
-        calendar:  cal,
-        timeRange: {
-          start: new Date(now).toISOString(),
-          end:   new Date(now + lookahead).toISOString(),
-        },
-        // Google supports server-side expansion; iCloud ignores it harmlessly,
-        // and we expand client-side via rrule as a fallback either way.
-        expand: provider === 'google',
-      })
-      const calName = mapCalendar(cal).name
-      for (const obj of objects) {
-        if (!obj?.data) continue
-        allEvents.push(...extractFutureEvents(obj.data, calName, lookahead))
+  await Promise.all(
+    targets.map(async (cal) => {
+      try {
+        const objects = await client.fetchCalendarObjects({
+          calendar: cal,
+          timeRange: {
+            start: new Date(now).toISOString(),
+            end: new Date(now + lookahead).toISOString(),
+          },
+          // Google supports server-side expansion; iCloud ignores it harmlessly,
+          // and we expand client-side via rrule as a fallback either way.
+          expand: provider === 'google',
+        })
+        const calName = mapCalendar(cal).name
+        for (const obj of objects) {
+          if (!obj?.data) continue
+          allEvents.push(...extractFutureEvents(obj.data, calName, lookahead))
+        }
+      } catch (err) {
+        console.error(`[calendar] failed fetching "${cal.url}":`, err?.message || err)
       }
-    } catch (err) {
-      console.error(`[calendar] failed fetching "${cal.url}":`, err?.message || err)
-    }
-  }))
+    })
+  )
 
   if (allEvents.length === 0) return { status: 'no-event' }
 
@@ -1145,9 +1196,9 @@ ipcMain.handle('sys:calendar-next-event', async () => {
   allEvents.sort((a, b) => a.start - b.start)
   const next = allEvents[0]
   return {
-    status:       'event',
-    title:        next.title,
-    start:        next.start,
+    status: 'event',
+    title: next.title,
+    start: next.start,
     calendarName: next.calendarName,
   }
 })
@@ -1177,10 +1228,9 @@ ipcMain.handle('sys:wifi-status', async () => {
 ipcMain.handle('sys:wifi-toggle', async (_event, on) => {
   const subcmd = `networksetup -setairportpower en0 ${on ? 'on' : 'off'}`
   try {
-    await execAsync(
-      `osascript -e 'do shell script "${subcmd}" with administrator privileges'`,
-      { timeout: 30000 },
-    )
+    await execAsync(`osascript -e 'do shell script "${subcmd}" with administrator privileges'`, {
+      timeout: 30000,
+    })
     return { ok: true }
   } catch (err) {
     console.error('[wifi-toggle]', err?.message)
@@ -1246,11 +1296,11 @@ const BT_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 async function getBTHelper() {
   if (_btHelperPath) return _btHelperPath
   const dir = app.getPath('userData')
-  const bundle  = path.join(dir, 'bt-helper.app')
-  const macos   = path.join(bundle, 'Contents', 'MacOS')
-  const binary  = path.join(macos, 'bt-helper')
-  const plist   = path.join(bundle, 'Contents', 'Info.plist')
-  const src     = path.join(dir, 'bt-helper.swift')
+  const bundle = path.join(dir, 'bt-helper.app')
+  const macos = path.join(bundle, 'Contents', 'MacOS')
+  const binary = path.join(macos, 'bt-helper')
+  const plist = path.join(bundle, 'Contents', 'Info.plist')
+  const src = path.join(dir, 'bt-helper.swift')
 
   // Reuse existing bundle if both binary and plist already exist (skip recompile).
   try {
@@ -1258,7 +1308,9 @@ async function getBTHelper() {
     await fs.promises.access(plist)
     _btHelperPath = bundle
     return bundle
-  } catch {}
+  } catch {
+    /* binary doesn't exist yet — fall through to compile */
+  }
 
   // Build the .app bundle structure.
   await fs.promises.mkdir(macos, { recursive: true })
@@ -1278,10 +1330,7 @@ async function runBTHelper(cmd) {
   const resultPath = path.join(app.getPath('userData'), 'bt-result.txt')
   // Wipe any stale result so we never accept old data.
   await fs.promises.rm(resultPath, { force: true }).catch(() => {})
-  await execAsync(
-    `open -W "${bundle}" --args ${cmd} "${resultPath}"`,
-    { timeout: 10000 },
-  )
+  await execAsync(`open -W "${bundle}" --args ${cmd} "${resultPath}"`, { timeout: 10000 })
   const out = await fs.promises.readFile(resultPath, 'utf8').catch(() => '')
   return out.trim()
 }
@@ -1331,14 +1380,18 @@ ipcMain.handle('sys:caffeinate-toggle', async (_event, on) => {
   if (on) {
     if (_caffeinateProc && !_caffeinateProc.killed) return { ok: true }
     _caffeinateProc = spawn('caffeinate', ['-d'], { detached: false })
-    _caffeinateProc.on('exit', () => { _caffeinateProc = null })
+    _caffeinateProc.on('exit', () => {
+      _caffeinateProc = null
+    })
   } else {
     if (_caffeinateProc) {
       _caffeinateProc.kill()
       _caffeinateProc = null
     }
     // Kill any stray system-level caffeinate processes too.
-    await execAsync('pgrep -x caffeinate | xargs kill 2>/dev/null || true', { timeout: 2000 }).catch(() => {})
+    await execAsync('pgrep -x caffeinate | xargs kill 2>/dev/null || true', {
+      timeout: 2000,
+    }).catch(() => {})
   }
   return { ok: true }
 })

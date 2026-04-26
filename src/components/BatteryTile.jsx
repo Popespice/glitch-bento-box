@@ -12,9 +12,9 @@ function fmtTimeRemaining(minutes) {
 }
 
 export default function BatteryTile() {
-  const [level,         setLevel]         = useState(0)
-  const [charging,      setCharging]      = useState(false)
-  const [hasBattery,    setHasBattery]    = useState(true)
+  const [level, setLevel] = useState(0)
+  const [charging, setCharging] = useState(false)
+  const [hasBattery, setHasBattery] = useState(true)
   const [timeRemaining, setTimeRemaining] = useState(-1)
 
   usePolling(async () => {
@@ -24,7 +24,9 @@ export default function BatteryTile() {
       setLevel(b.percent ?? 0)
       setCharging(b.isCharging || b.acConnected)
       setTimeRemaining(b.timeRemaining ?? -1)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, 30000)
 
   const activeSegs = Math.round((level / 100) * SEGMENTS)
@@ -42,10 +44,7 @@ export default function BatteryTile() {
       </div>
       <div className="battery-segments">
         {Array.from({ length: SEGMENTS }).map((_, i) => (
-          <div
-            key={i}
-            className={`battery-seg ${i < activeSegs ? 'active' : 'inactive'}`}
-          />
+          <div key={i} className={`battery-seg ${i < activeSegs ? 'active' : 'inactive'}`} />
         ))}
       </div>
       {!charging && timeRemaining > 0 && (

@@ -1,9 +1,17 @@
 /* ============================================================
    RESET
    ============================================================ */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
-html, body, #root {
+html,
+body,
+#root {
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -115,7 +123,9 @@ html, body, #root {
   position: relative;
   min-height: 0;
   min-width: 0;
-  transition: background-color 0.35s ease, color 0.35s ease;
+  transition:
+    background-color 0.35s ease,
+    color 0.35s ease;
 }
 
 .tile-label {
@@ -358,7 +368,7 @@ html, body, #root {
 .pulse-dot-chart {
   display: block;
   width: 100%;
-  height: auto;        /* preserves 4:1 aspect from viewBox so dots stay round */
+  height: auto; /* preserves 4:1 aspect from viewBox so dots stay round */
   margin: 4px 0 6px;
 }
 
@@ -473,7 +483,9 @@ html, body, #root {
 .mem-bar-fill {
   height: 100%;
   background: var(--bar-fill);
-  transition: background-color 0.35s ease, width 0.6s ease;
+  transition:
+    background-color 0.35s ease,
+    width 0.6s ease;
 }
 
 .mem-swap {
@@ -670,7 +682,9 @@ html, body, #root {
   height: 10px;
   border-radius: 50%;
   background: #888;
-  transition: transform 0.25s ease, background-color 0.25s ease;
+  transition:
+    transform 0.25s ease,
+    background-color 0.25s ease;
 }
 
 .toggle-switch.on .toggle-knob {
@@ -822,7 +836,10 @@ html, body, #root {
   color: var(--text-secondary);
   border: 1px solid var(--separator);
   cursor: pointer;
-  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease,
+    border-color 0.25s ease;
   z-index: 100;
 }
 
@@ -915,7 +932,9 @@ html, body, #root {
   border: 1px solid var(--separator);
   padding: 4px 9px;
   cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .glyph-btn:hover {
@@ -932,7 +951,7 @@ html, body, #root {
 .glyph-timer-label {
   font-family: 'Space Mono', monospace;
   font-size: 9px;
-  letter-spacing: 0.10em;
+  letter-spacing: 0.1em;
   color: var(--text-secondary);
 }
 
@@ -1080,7 +1099,7 @@ html, body, #root {
 .settings-save {
   font-family: 'Space Mono', monospace;
   font-size: 11px;
-  letter-spacing: 0.10em;
+  letter-spacing: 0.1em;
   padding: 9px 22px;
   background: var(--text-primary);
   color: var(--tile-bg);
@@ -1113,7 +1132,7 @@ html, body, #root {
 .settings-button {
   font-family: 'Space Mono', monospace;
   font-size: 10px;
-  letter-spacing: 0.10em;
+  letter-spacing: 0.1em;
   padding: 7px 14px;
   background: var(--text-primary);
   color: var(--tile-bg);
@@ -1154,13 +1173,16 @@ html, body, #root {
   flex: 1;
   font-family: 'Space Mono', monospace;
   font-size: 10px;
-  letter-spacing: 0.10em;
+  letter-spacing: 0.1em;
   padding: 7px 12px;
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid var(--separator);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .settings-tab:hover:not(:disabled) {
@@ -1201,7 +1223,7 @@ html, body, #root {
   user-select: none;
 }
 
-.settings-calendar-item input[type="checkbox"] {
+.settings-calendar-item input[type='checkbox'] {
   accent-color: var(--text-primary);
   cursor: pointer;
 }
@@ -1226,6 +1248,10 @@ html.window-hidden *::after {
 }
 
 @keyframes wave-pulse {
-  from { transform: scaleY(1); }
-  to   { transform: scaleY(0.2); }
+  from {
+    transform: scaleY(1);
+  }
+  to {
+    transform: scaleY(0.2);
+  }
 }

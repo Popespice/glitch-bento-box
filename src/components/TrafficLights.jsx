@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const isMac = typeof navigator !== 'undefined' &&
-  navigator.userAgent.includes('Macintosh')
+const isMac = typeof navigator !== 'undefined' && navigator.userAgent.includes('Macintosh')
 
 export default function TrafficLights() {
   const [visible, setVisible] = useState(false)

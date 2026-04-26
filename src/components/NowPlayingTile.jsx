@@ -1,12 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
 
-const BARS          = 36
+const BARS = 36
 const PROGRESS_DOTS = 120
-const FETCH_MS      = 5000   // server poll cadence — be nice to Spotify
-const TICK_MS       = 1000   // local interpolation of position between fetches
+const FETCH_MS = 5000 // server poll cadence — be nice to Spotify
+const TICK_MS = 1000 // local interpolation of position between fetches
+
+// Decorative waveform bar data — computed once at module load (not during render)
+// so Math.random() stays outside the component's render cycle.
+const BARS_DATA = Array.from({ length: BARS }, () => ({
+  base: 0.25 + Math.random() * 0.75,
+  dur: (0.7 + Math.random() * 0.9).toFixed(2),
+  delay: (-Math.random() * 2).toFixed(2),
+}))
 
 function DotProgressBar({ pct }) {
   const filled = Math.round((pct / 100) * PROGRESS_DOTS)
@@ -26,20 +34,25 @@ function fmt(sec) {
 }
 
 export default function NowPlayingTile() {
-  const [status,    setStatus]    = useState('idle')        // 'playing' | 'idle' | 'disconnected' | 'error'
-  const [track,     setTrack]     = useState(null)          // { name, artist, duration }
-  const [position,  setPosition]  = useState(0)
+  const [status, setStatus] = useState('idle') // 'playing' | 'idle' | 'disconnected' | 'error'
+  const [track, setTrack] = useState(null) // { name, artist, duration }
+  const [position, setPosition] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
 
   // Hold the latest playing flag in a ref so the local-tick interval
   // can read it without resetting whenever it changes.
   const isPlayingRef = useRef(false)
-  isPlayingRef.current = isPlaying && status === 'playing'
+  useEffect(() => {
+    isPlayingRef.current = isPlaying && status === 'playing'
+  }, [isPlaying, status])
 
   const fetchNow = async () => {
     try {
       const data = await sys.nowPlaying()
-      if (!data) { setStatus('error'); return }
+      if (!data) {
+        setStatus('error')
+        return
+      }
       setStatus(data.status)
       if (data.status === 'playing') {
         setTrack(data.track)
@@ -80,37 +93,27 @@ export default function NowPlayingTile() {
     return () => clearInterval(id)
   }, [track?.duration])
 
-  const bars = useMemo(
-    () =>
-      Array.from({ length: BARS }, () => ({
-        base:  0.25 + Math.random() * 0.75,
-        dur:   (0.7 + Math.random() * 0.9).toFixed(2),
-        delay: (-Math.random() * 2).toFixed(2),
-      })),
-    [],
-  )
-
   // Branch render by state. We always draw the tile chrome (label + waveform)
   // so the layout doesn't jump around as Spotify state changes.
-  let nameText  = track?.name || ''
+  let nameText = track?.name || ''
   let artistText = track?.artist || ''
   let showProgress = false
 
   if (status === 'disconnected') {
-    nameText   = 'SPOTIFY OFFLINE'
+    nameText = 'SPOTIFY OFFLINE'
     artistText = 'OPEN SETTINGS TO CONNECT'
   } else if (status === 'idle' || !track) {
-    nameText   = 'NOTHING PLAYING'
+    nameText = 'NOTHING PLAYING'
     artistText = ''
   } else if (status === 'error') {
-    nameText   = 'CONNECTION ERROR'
+    nameText = 'CONNECTION ERROR'
     artistText = 'RETRYING…'
   } else {
     showProgress = true
   }
 
   const pct = showProgress ? (position / track.duration) * 100 : 0
-  const tileClass = `tile playing-tile${isPlayingRef.current ? '' : ' playing-tile--paused'}`
+  const tileClass = `tile playing-tile${isPlaying && status === 'playing' ? '' : ' playing-tile--paused'}`
 
   return (
     <div className={tileClass}>
@@ -123,7 +126,7 @@ export default function NowPlayingTile() {
           {artistText && <span className="playing-artist">{artistText}</span>}
         </div>
         <div className="waveform">
-          {bars.map((b, i) => (
+          {BARS_DATA.map((b, i) => (
             <div
               key={i}
               className="waveform-bar"
@@ -138,9 +141,13 @@ export default function NowPlayingTile() {
       </div>
       {showProgress && (
         <div className="progress-row">
-          <span className="progress-time"><DotMatrix text={fmt(position)} /></span>
+          <span className="progress-time">
+            <DotMatrix text={fmt(position)} />
+          </span>
           <DotProgressBar pct={pct} />
-          <span className="progress-time"><DotMatrix text={fmt(track.duration)} /></span>
+          <span className="progress-time">
+            <DotMatrix text={fmt(track.duration)} />
+          </span>
         </div>
       )}
     </div>

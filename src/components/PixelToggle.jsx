@@ -3,8 +3,8 @@
 
 const COLS = 8
 const ROWS = 2
-const S    = 6      // dot spacing
-const R    = 2.2    // dot radius
+const S = 6 // dot spacing
+const R = 2.2 // dot radius
 
 const W = (COLS - 1) * S + R * 2
 const H = (ROWS - 1) * S + R * 2
@@ -16,11 +16,21 @@ export default function PixelToggle({ on, onClick, disabled = false }) {
       height={H}
       viewBox={`0 0 ${W} ${H}`}
       onClick={disabled ? undefined : onClick}
-      style={{ cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.35 : 1, flexShrink: 0 }}
+      style={{
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.35 : 1,
+        flexShrink: 0,
+      }}
       aria-label={on ? 'On' : 'Off'}
       role="button"
       tabIndex={disabled ? -1 : 0}
-      onKeyDown={disabled ? undefined : (e) => { if (e.key === 'Enter' || e.key === ' ') onClick?.() }}
+      onKeyDown={
+        disabled
+          ? undefined
+          : (e) => {
+              if (e.key === 'Enter' || e.key === ' ') onClick?.()
+            }
+      }
     >
       {Array.from({ length: ROWS }, (_, row) =>
         Array.from({ length: COLS }, (_, col) => {
@@ -34,13 +44,7 @@ export default function PixelToggle({ on, onClick, disabled = false }) {
             fill = rightHalf ? 'var(--dot-dim)' : 'rgba(224,224,224,0.22)'
           }
           return (
-            <circle
-              key={`${row}-${col}`}
-              cx={R + col * S}
-              cy={R + row * S}
-              r={R}
-              fill={fill}
-            />
+            <circle key={`${row}-${col}`} cx={R + col * S} cy={R + row * S} r={R} fill={fill} />
           )
         })
       )}

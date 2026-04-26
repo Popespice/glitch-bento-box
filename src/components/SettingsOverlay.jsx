@@ -2,32 +2,32 @@ import { useEffect, useRef, useState } from 'react'
 import { sys } from '../lib/sys.js'
 
 export default function SettingsOverlay({ onClose }) {
-  const [locationQuery, setLocationQuery]   = useState('')
-  const [locationName,  setLocationName]    = useState('')
-  const [locationError, setLocationError]   = useState('')
+  const [locationQuery, setLocationQuery] = useState('')
+  const [locationName, setLocationName] = useState('')
+  const [locationError, setLocationError] = useState('')
   const [resolvedCoords, setResolvedCoords] = useState(null)
-  const [githubUser,    setGithubUser]      = useState('')
-  const [saving,        setSaving]          = useState(false)
-  const [saved,         setSaved]           = useState(false)
-  const [geocoding,     setGeocoding]       = useState(false)
+  const [githubUser, setGithubUser] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [geocoding, setGeocoding] = useState(false)
 
   // Spotify state — credentials are bundled, so this is just connect/disconnect.
-  const [spotifyConnected,  setSpotifyConnected]  = useState(false)
+  const [spotifyConnected, setSpotifyConnected] = useState(false)
   const [spotifyConnecting, setSpotifyConnecting] = useState(false)
-  const [spotifyError,      setSpotifyError]      = useState('')
+  const [spotifyError, setSpotifyError] = useState('')
 
   // Calendar state — provider-aware (iCloud or Google), with calendar picker.
-  const [calProvider,    setCalProvider]    = useState(null)        // persisted provider
-  const [calTab,         setCalTab]         = useState('icloud')    // active tab in UI
-  const [calConnected,   setCalConnected]   = useState(false)
-  const [calConnecting,  setCalConnecting]  = useState(false)
-  const [calError,       setCalError]       = useState('')
-  const [calCalendars,   setCalCalendars]   = useState([])          // [{ id, name }]
-  const [activeCalIds,   setActiveCalIds]   = useState([])
-  const [icloudUser,     setIcloudUser]     = useState('')
-  const [icloudPass,     setIcloudPass]     = useState('')
-  const [calSaving,      setCalSaving]      = useState(false)
-  const [calSaved,       setCalSaved]       = useState(false)
+  const [calProvider, setCalProvider] = useState(null) // persisted provider
+  const [calTab, setCalTab] = useState('icloud') // active tab in UI
+  const [calConnected, setCalConnected] = useState(false)
+  const [calConnecting, setCalConnecting] = useState(false)
+  const [calError, setCalError] = useState('')
+  const [calCalendars, setCalCalendars] = useState([]) // [{ id, name }]
+  const [activeCalIds, setActiveCalIds] = useState([])
+  const [icloudUser, setIcloudUser] = useState('')
+  const [icloudPass, setIcloudPass] = useState('')
+  const [calSaving, setCalSaving] = useState(false)
+  const [calSaved, setCalSaved] = useState(false)
 
   const overlayRef = useRef(null)
 
@@ -54,18 +54,21 @@ export default function SettingsOverlay({ onClose }) {
   // Load existing settings on mount
   useEffect(() => {
     sys.settingsGet().then((s) => {
-      if (s?.weather?.query)        setLocationQuery(s.weather.query)
+      if (s?.weather?.query) setLocationQuery(s.weather.query)
       if (s?.weather?.locationName) setLocationName(s.weather.locationName)
-      if (s?.weather?.lat != null)  setResolvedCoords({ lat: s.weather.lat, lon: s.weather.lon })
-      if (s?.github?.username)      setGithubUser(s.github.username)
+      if (s?.weather?.lat != null) setResolvedCoords({ lat: s.weather.lat, lon: s.weather.lon })
+      if (s?.github?.username) setGithubUser(s.github.username)
       setSpotifyConnected(!!s?.spotify?.connected)
     })
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only init
     refreshCalendarStatus()
   }, [])
 
   // Escape key to close
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -97,7 +100,9 @@ export default function SettingsOverlay({ onClose }) {
   }
 
   const handleLocationBlur = () => geocode(locationQuery)
-  const handleLocationKey  = (e) => { if (e.key === 'Enter') geocode(locationQuery) }
+  const handleLocationKey = (e) => {
+    if (e.key === 'Enter') geocode(locationQuery)
+  }
 
   const handleSpotifyConnect = async () => {
     setSpotifyConnecting(true)
@@ -106,7 +111,9 @@ export default function SettingsOverlay({ onClose }) {
       const result = await sys.spotifyConnect()
       if (result?.ok) {
         await refreshSpotifyStatus()
-        window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } }))
+        window.dispatchEvent(
+          new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } })
+        )
       } else {
         setSpotifyError(result?.error || 'Connect failed')
       }
@@ -118,11 +125,14 @@ export default function SettingsOverlay({ onClose }) {
   }
 
   const handleSpotifyDisconnect = async () => {
-    if (!window.confirm('Disconnect Spotify? Your refresh token will be wiped from local storage.')) return
+    if (!window.confirm('Disconnect Spotify? Your refresh token will be wiped from local storage.'))
+      return
     await sys.spotifyDisconnect()
     await refreshSpotifyStatus()
     setSpotifyError('')
-    window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } }))
+    window.dispatchEvent(
+      new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } })
+    )
   }
 
   const handleCalendarConnectIcloud = async () => {
@@ -138,9 +148,11 @@ export default function SettingsOverlay({ onClose }) {
         setCalCalendars(result.calendars || [])
         // Default: include all calendars until the user picks
         setActiveCalIds((result.calendars || []).map((c) => c.id))
-        setIcloudPass('')   // clear password from the input field
+        setIcloudPass('') // clear password from the input field
         await refreshCalendarStatus()
-        window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } }))
+        window.dispatchEvent(
+          new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
+        )
       } else {
         setCalError(result?.error || 'iCloud connect failed')
       }
@@ -160,7 +172,9 @@ export default function SettingsOverlay({ onClose }) {
         setCalCalendars(result.calendars || [])
         setActiveCalIds((result.calendars || []).map((c) => c.id))
         await refreshCalendarStatus()
-        window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } }))
+        window.dispatchEvent(
+          new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
+        )
       } else {
         setCalError(result?.error || 'Google connect failed')
       }
@@ -172,7 +186,8 @@ export default function SettingsOverlay({ onClose }) {
   }
 
   const handleCalendarDisconnect = async () => {
-    if (!window.confirm('Disconnect calendar? All credentials will be wiped from local storage.')) return
+    if (!window.confirm('Disconnect calendar? All credentials will be wiped from local storage.'))
+      return
     await sys.calendarDisconnect()
     setCalCalendars([])
     setActiveCalIds([])
@@ -180,20 +195,22 @@ export default function SettingsOverlay({ onClose }) {
     setIcloudPass('')
     setCalError('')
     await refreshCalendarStatus()
-    window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } }))
+    window.dispatchEvent(
+      new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
+    )
   }
 
   const toggleCalendarId = (id) => {
-    setActiveCalIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    )
+    setActiveCalIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
   const handleSaveCalendars = async () => {
     setCalSaving(true)
     try {
       await sys.calendarSetActive(activeCalIds)
-      window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } }))
+      window.dispatchEvent(
+        new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
+      )
       setCalSaved(true)
       setTimeout(() => setCalSaved(false), 1200)
     } finally {
@@ -207,10 +224,10 @@ export default function SettingsOverlay({ onClose }) {
       const changed = []
       if (resolvedCoords) {
         await sys.settingsSet('weather', {
-          query:        locationQuery,
+          query: locationQuery,
           locationName: locationName,
-          lat:          resolvedCoords.lat,
-          lon:          resolvedCoords.lon,
+          lat: resolvedCoords.lat,
+          lon: resolvedCoords.lon,
         })
         changed.push('weather')
       }
@@ -222,7 +239,10 @@ export default function SettingsOverlay({ onClose }) {
       window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed } }))
 
       setSaved(true)
-      setTimeout(() => { setSaved(false); onClose() }, 800)
+      setTimeout(() => {
+        setSaved(false)
+        onClose()
+      }, 800)
     } finally {
       setSaving(false)
     }
@@ -233,7 +253,9 @@ export default function SettingsOverlay({ onClose }) {
       <div className="settings-panel">
         <div className="settings-header">
           <span className="settings-title">SETTINGS</span>
-          <button className="settings-close" onClick={onClose} aria-label="Close">✕</button>
+          <button className="settings-close" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
 
         <div className="settings-section">
@@ -243,14 +265,16 @@ export default function SettingsOverlay({ onClose }) {
             type="text"
             placeholder="City name or zip code"
             value={locationQuery}
-            onChange={(e) => { setLocationQuery(e.target.value); setLocationName(''); setResolvedCoords(null) }}
+            onChange={(e) => {
+              setLocationQuery(e.target.value)
+              setLocationName('')
+              setResolvedCoords(null)
+            }}
             onBlur={handleLocationBlur}
             onKeyDown={handleLocationKey}
             spellCheck={false}
           />
-          {geocoding && (
-            <span className="settings-status">LOCATING…</span>
-          )}
+          {geocoding && <span className="settings-status">LOCATING…</span>}
           {!geocoding && locationName && (
             <span className="settings-status settings-status--ok">✓ {locationName}</span>
           )}
@@ -316,7 +340,8 @@ export default function SettingsOverlay({ onClose }) {
                     autoComplete="off"
                   />
                   <span className="settings-hint">
-                    Generate an app-specific password at appleid.apple.com — never your real Apple ID password.
+                    Generate an app-specific password at appleid.apple.com — never your real Apple
+                    ID password.
                   </span>
                 </>
               )}
@@ -427,9 +452,7 @@ export default function SettingsOverlay({ onClose }) {
               </>
             ) : (
               <>
-                {spotifyConnecting && (
-                  <span className="settings-status">WAITING FOR BROWSER…</span>
-                )}
+                {spotifyConnecting && <span className="settings-status">WAITING FOR BROWSER…</span>}
                 {!spotifyConnecting && spotifyError && (
                   <span className="settings-status settings-status--err">{spotifyError}</span>
                 )}
@@ -447,7 +470,8 @@ export default function SettingsOverlay({ onClose }) {
             )}
           </div>
           <span className="settings-hint">
-            Sign in once. Only your refresh token is stored locally — disconnect any time to wipe it.
+            Sign in once. Only your refresh token is stored locally — disconnect any time to wipe
+            it.
           </span>
         </div>
 

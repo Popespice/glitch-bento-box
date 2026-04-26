@@ -54,7 +54,11 @@ export default function App() {
         <HeatmapTile />
         <NextEventTile />
       </div>
-      <button className="settings-btn" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+      <button
+        className="settings-btn"
+        onClick={() => setSettingsOpen(true)}
+        aria-label="Open settings"
+      >
         ⚙
       </button>
       <button className="theme-toggle" onClick={toggle} aria-label="Toggle theme">
