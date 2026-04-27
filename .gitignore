@@ -27,3 +27,4 @@ yarn-error.log*
 .env.*.local
 electron/spotify-config.js
 electron/google-calendar-config.js
+electron/github-config.js

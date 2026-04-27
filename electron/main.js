@@ -14,6 +14,11 @@ import {
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI,
 } from './google-calendar-config.js'
+import {
+  GITHUB_CLIENT_ID,
+  GITHUB_CLIENT_SECRET,
+  GITHUB_REDIRECT_URI,
+} from './github-config.js'
 import { createDAVClient } from 'tsdav'
 import nodeIcal from 'node-ical'
 
@@ -46,7 +51,9 @@ const store = new Store({
       lon: null,
     },
     github: {
-      username: '',
+      username: '',   // manual override / gh-CLI fallback
+      accessToken: null, // GitHub OAuth access token (stored after Connect)
+      login: '',         // username resolved via OAuth
     },
     pomodoro: {
       minutes: 25,
@@ -78,6 +85,7 @@ let _spotifyAccess = null // { token: string, expiresAt: number (ms epoch) }
 let _pendingConnect = null // { resolve, reject, state, timeoutId } during Spotify OAuth flow
 let _googleAccess = null // { token: string, expiresAt: number }
 let _pendingGCalConnect = null // { resolve, reject, state, timeoutId } during Google OAuth flow
+let _pendingGithubConnect = null // { resolve, reject, state, timeoutId } during GitHub OAuth flow
 let _caffeinateProc = null // ChildProcess | null — caffeinate -d background process
 let _btHelperPath = null // string | null — path to compiled Swift BT helper binary
 
@@ -523,18 +531,30 @@ ipcMain.handle('sys:github-heatmap', async () => {
     return _heatmapCache
   }
   try {
-    // Use gh's stored OAuth token — works without any extra config
-    const { stdout: tokenRaw } = await execAsync('gh auth token')
-    const token = tokenRaw.trim()
+    // Priority 1: in-app GitHub OAuth token
+    let token = store.get('github.accessToken') || null
+    let login = store.get('github.login') || ''
 
-    const storedUsername = store.get('github.username')
-    let login
-    if (storedUsername) {
-      login = storedUsername
-    } else {
-      const { stdout: userRaw } = await execAsync('gh api user -q .login')
-      login = userRaw.trim()
+    // Priority 2: gh CLI token (if not connected via OAuth)
+    if (!token) {
+      try {
+        const { stdout } = await execAsync('gh auth token')
+        token = stdout.trim()
+      } catch { /* gh not installed or not logged in */ }
     }
+
+    // Resolve login: stored OAuth login → manual override → gh CLI → give up
+    if (!login) {
+      login = store.get('github.username') || ''
+    }
+    if (!login && token) {
+      try {
+        const { stdout } = await execAsync('gh api user -q .login')
+        login = stdout.trim()
+      } catch { /* ignore */ }
+    }
+
+    if (!token || !login) return null
 
     const res = await fetch('https://api.github.com/graphql', {
       method: 'POST',
@@ -545,8 +565,9 @@ ipcMain.handle('sys:github-heatmap', async () => {
       body: JSON.stringify({ query: GH_QUERY, variables: { login } }),
     })
 
-    const { data } = await res.json()
-    const weeks = data.user.contributionsCollection.contributionCalendar.weeks
+    const json = await res.json()
+    if (json.errors) throw new Error(json.errors[0]?.message || 'GraphQL error')
+    const weeks = json.data.user.contributionsCollection.contributionCalendar.weeks
 
     // Flatten into array of { date, count }, most recent 140 days (20 weeks)
     const days = weeks
@@ -814,6 +835,178 @@ ipcMain.handle('sys:now-playing', async () => {
     },
     position: Math.floor((data.progress_ms ?? 0) / 1000),
   }
+})
+
+// ---------- GitHub OAuth ----------
+//
+// Auth flow mirrors Spotify — opens a BrowserWindow, intercepts the
+// bento://github-callback redirect, exchanges code for an access token, and
+// stores it. GitHub access tokens don't expire (unlike Spotify), so we store
+// the token directly — no refresh token needed.
+//
+// Scope: read:user — enough for the GraphQL contributionsCollection query.
+
+const GITHUB_SCOPE = 'read:user'
+const GITHUB_CONNECT_TIMEOUT_MS = 5 * 60 * 1000
+
+function clearPendingGithubConnect() {
+  if (_pendingGithubConnect?.timeoutId) clearTimeout(_pendingGithubConnect.timeoutId)
+  _pendingGithubConnect = null
+}
+
+async function handleGithubCallback(url) {
+  if (!_pendingGithubConnect) return
+
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    _pendingGithubConnect.reject(new Error('Malformed callback URL'))
+    clearPendingGithubConnect()
+    return
+  }
+
+  const code = parsed.searchParams.get('code')
+  const state = parsed.searchParams.get('state')
+  const error = parsed.searchParams.get('error')
+
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+
+  if (error) {
+    _pendingGithubConnect.reject(
+      new Error(error === 'access_denied' ? 'Permission denied' : error)
+    )
+    clearPendingGithubConnect()
+    return
+  }
+  if (state !== _pendingGithubConnect.state) {
+    _pendingGithubConnect.reject(new Error('State mismatch (CSRF check failed)'))
+    clearPendingGithubConnect()
+    return
+  }
+  if (!code) {
+    _pendingGithubConnect.reject(new Error('No authorization code in callback'))
+    clearPendingGithubConnect()
+    return
+  }
+
+  try {
+    // Exchange code for access token
+    const res = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: GITHUB_REDIRECT_URI,
+      }),
+    })
+    if (!res.ok) throw new Error(`Token exchange failed: ${res.status}`)
+    const payload = await res.json()
+    if (payload.error) throw new Error(payload.error_description || payload.error)
+
+    const accessToken = payload.access_token
+
+    // Resolve the username immediately so we can store it
+    const userRes = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.github+json' },
+    })
+    const userJson = await userRes.json()
+    const login = userJson.login || ''
+
+    store.set('github.accessToken', accessToken)
+    store.set('github.login', login)
+    // Invalidate heatmap cache so next poll re-fetches with the new token
+    _heatmapCache = null
+    _heatmapFetchedAt = 0
+
+    _pendingGithubConnect.resolve({ ok: true, login })
+  } catch (err) {
+    _pendingGithubConnect.reject(err)
+  } finally {
+    clearPendingGithubConnect()
+  }
+}
+
+ipcMain.handle('github:connect', async () => {
+  if (_pendingGithubConnect) {
+    return { ok: false, error: 'Connect already in progress' }
+  }
+  // If credentials are still placeholders, tell the renderer immediately.
+  if (GITHUB_CLIENT_ID === 'paste-your-client-id-here') {
+    return { ok: false, error: 'NO_CREDENTIALS' }
+  }
+
+  const state = crypto.randomBytes(16).toString('hex')
+  const authUrl = new URL('https://github.com/login/oauth/authorize')
+  authUrl.searchParams.set('client_id', GITHUB_CLIENT_ID)
+  authUrl.searchParams.set('redirect_uri', GITHUB_REDIRECT_URI)
+  authUrl.searchParams.set('scope', GITHUB_SCOPE)
+  authUrl.searchParams.set('state', state)
+
+  return new Promise((resolve, reject) => {
+    const authWin = new BrowserWindow({
+      width: 520,
+      height: 700,
+      title: 'Connect GitHub',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+      },
+    })
+
+    const cleanup = (err) => {
+      if (!authWin.isDestroyed()) authWin.close()
+      clearPendingGithubConnect()
+      if (err) reject(err)
+    }
+
+    const timeoutId = setTimeout(() => {
+      cleanup(new Error('Connect timed out — window closed?'))
+    }, GITHUB_CONNECT_TIMEOUT_MS)
+
+    _pendingGithubConnect = { resolve, reject, state, timeoutId }
+
+    const interceptRedirect = (_event, url) => {
+      if (!url.startsWith('bento://github-callback')) return
+      _event.preventDefault()
+      handleGithubCallback(url)
+      if (!authWin.isDestroyed()) authWin.close()
+    }
+    authWin.webContents.on('will-redirect', interceptRedirect)
+    authWin.webContents.on('will-navigate', interceptRedirect)
+
+    authWin.on('closed', () => {
+      if (_pendingGithubConnect) cleanup(new Error('Auth window closed'))
+    })
+
+    authWin.loadURL(authUrl.toString())
+  }).then(
+    (result) => result,
+    (err) => ({ ok: false, error: err.message })
+  )
+})
+
+ipcMain.handle('github:disconnect', () => {
+  store.set('github.accessToken', null)
+  store.set('github.login', '')
+  _heatmapCache = null
+  _heatmapFetchedAt = 0
+  return { ok: true }
+})
+
+ipcMain.handle('github:status', () => {
+  const token = store.get('github.accessToken')
+  const login = store.get('github.login') || ''
+  return { connected: !!token, login }
 })
 
 // ---------- Calendar (CalDAV: iCloud + Google) ----------

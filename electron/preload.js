@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('bento', {
   spotifyConnect: () => ipcRenderer.invoke('spotify:connect'),
   spotifyDisconnect: () => ipcRenderer.invoke('spotify:disconnect'),
 
+  // GitHub OAuth
+  githubConnect: () => ipcRenderer.invoke('github:connect'),
+  githubDisconnect: () => ipcRenderer.invoke('github:disconnect'),
+  githubStatus: () => ipcRenderer.invoke('github:status'),
+
   // Calendar (CalDAV: iCloud + Google)
   calendarStatus: () => ipcRenderer.invoke('calendar:status'),
   calendarConnectIcloud: (u, p) => ipcRenderer.invoke('calendar:connect-icloud', u, p),

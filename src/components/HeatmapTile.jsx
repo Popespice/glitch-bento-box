@@ -52,10 +52,16 @@ export default function HeatmapTile() {
   const [cells, setCells] = useState(fallback)
   const [activeCount, setActiveCount] = useState(null)
   const [live, setLive] = useState(false)
+  const [login, setLogin] = useState('')
 
   useEffect(() => {
     let cancelled = false
     const fetchHeatmap = () => {
+      // Fetch login label alongside heatmap data
+      sys.githubStatus?.()?.then((s) => {
+        if (!cancelled) setLogin(s?.login || '')
+      }).catch(() => {})
+
       sys
         .githubHeatmap()
         .then((days) => {
@@ -79,10 +85,14 @@ export default function HeatmapTile() {
   }, [])
 
   const total = live ? activeCount : cells.reduce((s, c) => s + (c > 0.1 ? 1 : 0), 0)
+  const label = login ? `@${login}` : 'GITHUB ACTIVITY'
 
   return (
     <div className="tile heatmap-tile">
-      <span className="tile-label">GITHUB ACTIVITY{live ? ' ●' : ''}</span>
+      <span className="tile-label">
+        {label}
+        {live ? ' ●' : ''}
+      </span>
       <div className="heatmap-grid">
         {cells.map((c, i) => (
           <div key={i} className="heatmap-cell" style={cellStyle(c)} />

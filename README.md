@@ -86,7 +86,25 @@ In the app: **Settings → Weather Location** → type a city name or zip code. 
 
 ### 7. GitHub Heatmap
 
-In the app: **Settings → GitHub Username** → enter your handle, or leave blank to auto-detect via `gh` CLI.
+The heatmap pulls your contribution data from the GitHub GraphQL API. Two ways to authenticate:
+
+**Option A — in-app OAuth (recommended):**
+
+1. Go to [github.com/settings/developers](https://github.com/settings/developers) → **New OAuth App**
+2. Set **Authorization callback URL** to `bento://github-callback`
+3. Copy `electron/github-config.example.js` → `electron/github-config.js` and fill in Client ID + Secret
+4. In the app: **Settings → GitHub → Connect GitHub**
+
+**Option B — `gh` CLI fallback (no config needed):**
+
+If `github-config.js` has placeholder values, the app falls back to the `gh` CLI token automatically. Install `gh`, run `gh auth login`, then enter your username in **Settings → GitHub** (or leave blank to auto-detect).
+
+> **Commit email matters.** Only commits authored with an email registered to your GitHub account appear in the contribution graph. Set it with:
+> ```bash
+> git config --global user.email "your-github-email@example.com"
+> # or use your GitHub noreply address:
+> git config --global user.email "ID+username@users.noreply.github.com"
+> ```
 
 ---
 
