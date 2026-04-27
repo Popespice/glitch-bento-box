@@ -11,11 +11,12 @@ export default function SettingsOverlay({ onClose }) {
   const [saved, setSaved] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
 
-  // GitHub OAuth state
+  // GitHub PAT state
   const [githubConnected, setGithubConnected] = useState(false)
-  const [githubConnecting, setGithubConnecting] = useState(false)
+  const [githubSaving, setGithubSaving] = useState(false)
   const [githubLogin, setGithubLogin] = useState('')
   const [githubError, setGithubError] = useState('')
+  const [githubPat, setGithubPat] = useState('')
 
   // Spotify state — credentials are bundled, so this is just connect/disconnect.
   const [spotifyConnected, setSpotifyConnected] = useState(false)
@@ -117,31 +118,30 @@ export default function SettingsOverlay({ onClose }) {
     if (e.key === 'Enter') geocode(locationQuery)
   }
 
-  const handleGithubConnect = async () => {
-    setGithubConnecting(true)
+  const handleGithubSave = async () => {
+    if (!githubPat.trim()) return
+    setGithubSaving(true)
     setGithubError('')
     try {
-      const result = await sys.githubConnect()
+      const result = await sys.githubConnect(githubPat.trim())
       if (result?.ok) {
+        setGithubPat('') // clear from input after saving
         await refreshGithubStatus()
         window.dispatchEvent(
           new CustomEvent('bento:settings-changed', { detail: { changed: ['github'] } })
         )
-      } else if (result?.error === 'NO_CREDENTIALS') {
-        setGithubError('Set up github-config.js first — see README')
       } else {
-        setGithubError(result?.error || 'Connect failed')
+        setGithubError(result?.error || 'Token validation failed')
       }
     } catch (err) {
-      setGithubError(err?.message || 'Connect failed')
+      setGithubError(err?.message || 'Token validation failed')
     } finally {
-      setGithubConnecting(false)
+      setGithubSaving(false)
     }
   }
 
   const handleGithubDisconnect = async () => {
-    if (!window.confirm('Disconnect GitHub? Your access token will be wiped from local storage.'))
-      return
+    if (!window.confirm('Disconnect GitHub? Your token will be wiped from local storage.')) return
     await sys.githubDisconnect()
     await refreshGithubStatus()
     setGithubError('')
@@ -331,53 +331,49 @@ export default function SettingsOverlay({ onClose }) {
 
         <div className="settings-section">
           <label className="settings-label">GITHUB</label>
-          <div className="settings-spotify-row">
-            {githubConnected ? (
-              <>
-                <span className="settings-status settings-status--ok">
-                  ✓ {githubLogin || 'CONNECTED'}
-                </span>
-                <button
-                  className="settings-button settings-button--ghost"
-                  onClick={handleGithubDisconnect}
-                >
-                  DISCONNECT
-                </button>
-              </>
-            ) : (
-              <>
-                {githubConnecting && (
-                  <span className="settings-status">WAITING FOR BROWSER…</span>
-                )}
-                {!githubConnecting && githubError && (
+          {githubConnected ? (
+            <div className="settings-spotify-row">
+              <span className="settings-status settings-status--ok">
+                ✓ {githubLogin || 'CONNECTED'}
+              </span>
+              <button
+                className="settings-button settings-button--ghost"
+                onClick={handleGithubDisconnect}
+              >
+                DISCONNECT
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                className="settings-input"
+                type="password"
+                placeholder="Paste a Personal Access Token"
+                value={githubPat}
+                onChange={(e) => setGithubPat(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleGithubSave()}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="settings-spotify-row">
+                {githubSaving && <span className="settings-status">VALIDATING…</span>}
+                {!githubSaving && githubError && (
                   <span className="settings-status settings-status--err">{githubError}</span>
                 )}
-                {!githubConnecting && !githubError && (
+                {!githubSaving && !githubError && (
                   <span className="settings-status">NOT CONNECTED</span>
                 )}
                 <button
                   className="settings-button"
-                  onClick={handleGithubConnect}
-                  disabled={githubConnecting}
+                  onClick={handleGithubSave}
+                  disabled={githubSaving || !githubPat.trim()}
                 >
-                  CONNECT GITHUB
+                  SAVE TOKEN
                 </button>
-              </>
-            )}
-          </div>
-          {!githubConnected && (
-            <>
-              <input
-                className="settings-input"
-                type="text"
-                placeholder="Username (fallback if not connected)"
-                value={githubUser}
-                onChange={(e) => setGithubUser(e.target.value)}
-                spellCheck={false}
-              />
+              </div>
               <span className="settings-hint">
-                Connect GitHub OAuth for live contributions, or enter a username to use the gh CLI
-                fallback.
+                Generate at github.com/settings/tokens — needs <code>read:user</code> scope. Falls
+                back to gh CLI if blank.
               </span>
             </>
           )}

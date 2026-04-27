@@ -20,8 +20,8 @@ contextBridge.exposeInMainWorld('bento', {
   spotifyConnect: () => ipcRenderer.invoke('spotify:connect'),
   spotifyDisconnect: () => ipcRenderer.invoke('spotify:disconnect'),
 
-  // GitHub OAuth
-  githubConnect: () => ipcRenderer.invoke('github:connect'),
+  // GitHub PAT
+  githubConnect: (pat) => ipcRenderer.invoke('github:connect', pat),
   githubDisconnect: () => ipcRenderer.invoke('github:disconnect'),
   githubStatus: () => ipcRenderer.invoke('github:status'),
 

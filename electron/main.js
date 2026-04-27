@@ -14,11 +14,6 @@ import {
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI,
 } from './google-calendar-config.js'
-import {
-  GITHUB_CLIENT_ID,
-  GITHUB_CLIENT_SECRET,
-  GITHUB_REDIRECT_URI,
-} from './github-config.js'
 import { createDAVClient } from 'tsdav'
 import nodeIcal from 'node-ical'
 
@@ -85,7 +80,6 @@ let _spotifyAccess = null // { token: string, expiresAt: number (ms epoch) }
 let _pendingConnect = null // { resolve, reject, state, timeoutId } during Spotify OAuth flow
 let _googleAccess = null // { token: string, expiresAt: number }
 let _pendingGCalConnect = null // { resolve, reject, state, timeoutId } during Google OAuth flow
-let _pendingGithubConnect = null // { resolve, reject, state, timeoutId } during GitHub OAuth flow
 let _caffeinateProc = null // ChildProcess | null — caffeinate -d background process
 let _btHelperPath = null // string | null — path to compiled Swift BT helper binary
 
@@ -837,162 +831,34 @@ ipcMain.handle('sys:now-playing', async () => {
   }
 })
 
-// ---------- GitHub OAuth ----------
+// ---------- GitHub Personal Access Token ----------
 //
-// Auth flow mirrors Spotify — opens a BrowserWindow, intercepts the
-// bento://github-callback redirect, exchanges code for an access token, and
-// stores it. GitHub access tokens don't expire (unlike Spotify), so we store
-// the token directly — no refresh token needed.
-//
-// Scope: read:user — enough for the GraphQL contributionsCollection query.
+// Simpler than OAuth for a personal app — user generates a PAT at
+// github.com/settings/tokens with read:user scope, pastes it into Settings,
+// and we validate it once by hitting api.github.com/user to resolve the login.
+// Token is stored in electron-store; no rebuild or OAuth App required.
 
-const GITHUB_SCOPE = 'read:user'
-const GITHUB_CONNECT_TIMEOUT_MS = 5 * 60 * 1000
-
-function clearPendingGithubConnect() {
-  if (_pendingGithubConnect?.timeoutId) clearTimeout(_pendingGithubConnect.timeoutId)
-  _pendingGithubConnect = null
-}
-
-async function handleGithubCallback(url) {
-  if (!_pendingGithubConnect) return
-
-  let parsed
+ipcMain.handle('github:connect', async (_event, pat) => {
+  if (!pat || typeof pat !== 'string' || !pat.trim()) {
+    return { ok: false, error: 'No token provided' }
+  }
+  const token = pat.trim()
   try {
-    parsed = new URL(url)
-  } catch {
-    _pendingGithubConnect.reject(new Error('Malformed callback URL'))
-    clearPendingGithubConnect()
-    return
-  }
-
-  const code = parsed.searchParams.get('code')
-  const state = parsed.searchParams.get('state')
-  const error = parsed.searchParams.get('error')
-
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  }
-
-  if (error) {
-    _pendingGithubConnect.reject(
-      new Error(error === 'access_denied' ? 'Permission denied' : error)
-    )
-    clearPendingGithubConnect()
-    return
-  }
-  if (state !== _pendingGithubConnect.state) {
-    _pendingGithubConnect.reject(new Error('State mismatch (CSRF check failed)'))
-    clearPendingGithubConnect()
-    return
-  }
-  if (!code) {
-    _pendingGithubConnect.reject(new Error('No authorization code in callback'))
-    clearPendingGithubConnect()
-    return
-  }
-
-  try {
-    // Exchange code for access token
-    const res = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        client_id: GITHUB_CLIENT_ID,
-        client_secret: GITHUB_CLIENT_SECRET,
-        code,
-        redirect_uri: GITHUB_REDIRECT_URI,
-      }),
+    const res = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
     })
-    if (!res.ok) throw new Error(`Token exchange failed: ${res.status}`)
-    const payload = await res.json()
-    if (payload.error) throw new Error(payload.error_description || payload.error)
-
-    const accessToken = payload.access_token
-
-    // Resolve the username immediately so we can store it
-    const userRes = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.github+json' },
-    })
-    const userJson = await userRes.json()
-    const login = userJson.login || ''
-
-    store.set('github.accessToken', accessToken)
+    if (res.status === 401) return { ok: false, error: 'Token invalid or expired' }
+    if (!res.ok) return { ok: false, error: `GitHub API error: ${res.status}` }
+    const user = await res.json()
+    const login = user.login || ''
+    store.set('github.accessToken', token)
     store.set('github.login', login)
-    // Invalidate heatmap cache so next poll re-fetches with the new token
     _heatmapCache = null
     _heatmapFetchedAt = 0
-
-    _pendingGithubConnect.resolve({ ok: true, login })
+    return { ok: true, login }
   } catch (err) {
-    _pendingGithubConnect.reject(err)
-  } finally {
-    clearPendingGithubConnect()
+    return { ok: false, error: err.message }
   }
-}
-
-ipcMain.handle('github:connect', async () => {
-  if (_pendingGithubConnect) {
-    return { ok: false, error: 'Connect already in progress' }
-  }
-  // If credentials are still placeholders, tell the renderer immediately.
-  if (GITHUB_CLIENT_ID === 'paste-your-client-id-here') {
-    return { ok: false, error: 'NO_CREDENTIALS' }
-  }
-
-  const state = crypto.randomBytes(16).toString('hex')
-  const authUrl = new URL('https://github.com/login/oauth/authorize')
-  authUrl.searchParams.set('client_id', GITHUB_CLIENT_ID)
-  authUrl.searchParams.set('redirect_uri', GITHUB_REDIRECT_URI)
-  authUrl.searchParams.set('scope', GITHUB_SCOPE)
-  authUrl.searchParams.set('state', state)
-
-  return new Promise((resolve, reject) => {
-    const authWin = new BrowserWindow({
-      width: 520,
-      height: 700,
-      title: 'Connect GitHub',
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-      },
-    })
-
-    const cleanup = (err) => {
-      if (!authWin.isDestroyed()) authWin.close()
-      clearPendingGithubConnect()
-      if (err) reject(err)
-    }
-
-    const timeoutId = setTimeout(() => {
-      cleanup(new Error('Connect timed out — window closed?'))
-    }, GITHUB_CONNECT_TIMEOUT_MS)
-
-    _pendingGithubConnect = { resolve, reject, state, timeoutId }
-
-    const interceptRedirect = (_event, url) => {
-      if (!url.startsWith('bento://github-callback')) return
-      _event.preventDefault()
-      handleGithubCallback(url)
-      if (!authWin.isDestroyed()) authWin.close()
-    }
-    authWin.webContents.on('will-redirect', interceptRedirect)
-    authWin.webContents.on('will-navigate', interceptRedirect)
-
-    authWin.on('closed', () => {
-      if (_pendingGithubConnect) cleanup(new Error('Auth window closed'))
-    })
-
-    authWin.loadURL(authUrl.toString())
-  }).then(
-    (result) => result,
-    (err) => ({ ok: false, error: err.message })
-  )
 })
 
 ipcMain.handle('github:disconnect', () => {
