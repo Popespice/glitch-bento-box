@@ -44,7 +44,7 @@ export default function NetworkTile() {
     } catch {
       /* ignore */
     }
-  }, 2000)
+  }, 3000)
 
   const downFmt = formatSpeed(down)
   const peakFmt = formatSpeed(peakDown)

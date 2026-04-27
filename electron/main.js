@@ -164,6 +164,164 @@ ipcMain.on('win:maximize', () => {
   mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize()
 })
 
+// ---------- System stats cache ----------
+//
+// All hardware-stat IPC handlers serve from a single shared cache that is
+// refreshed by one background loop every STATS_INTERVAL_MS. This eliminates
+// N overlapping systeminformation/ioreg subprocess calls (one per tile) and
+// replaces them with a single coordinated fetch. Tiles can poll as fast as
+// they like — the main process does real work at most once per interval.
+
+const STATS_INTERVAL_MS = 3000 // one sweep every 3 s
+const STATS_TTL_MS = STATS_INTERVAL_MS + 500 // cache is "fresh" for 3.5 s
+
+let _statsCache = null // { cpu, gpu, memory, network, battery, disk, fetchedAt }
+
+// GPU model never changes mid-session — cache it after the first lookup.
+let _gpuModelCache = null
+async function getGpuModel() {
+  if (_gpuModelCache) return _gpuModelCache
+  try {
+    const g = await si.graphics()
+    const ctrl = g.controllers?.[0]
+    _gpuModelCache = ctrl?.model || ctrl?.name || 'GPU'
+  } catch {
+    _gpuModelCache = 'GPU'
+  }
+  return _gpuModelCache
+}
+
+function normalizeSsid(raw) {
+  if (!raw || typeof raw !== 'string') return null
+  if (raw.toLowerCase().includes('redacted')) return null
+  return raw
+}
+
+async function sweepStats() {
+  try {
+    // 1. CPU — si.currentLoad() uses `top` on macOS (~50 ms)
+    const [load, cpuInfo] = await Promise.all([si.currentLoad(), si.cpu()])
+    const cpu = {
+      percent: Math.round(load.currentLoad),
+      cores: load.cpus?.map((c) => Math.round(c.load)) ?? [],
+      speedGhz: cpuInfo.speed,
+      brand: `${cpuInfo.manufacturer} ${cpuInfo.brand}`,
+    }
+
+    // 2. GPU — ioreg on macOS (~100–300 ms); run in parallel with other calls
+    const gpuProm = (async () => {
+      if (process.platform === 'darwin') {
+        try {
+          const { stdout } = await execAsync('ioreg -rc IOAccelerator', { timeout: 2000 })
+          const match = stdout.match(/"Device Utilization %"=(\d+)/)
+          if (match) {
+            return {
+              percent: Math.max(0, Math.min(100, parseInt(match[1], 10))),
+              model: await getGpuModel(),
+            }
+          }
+        } catch { /* fall through */ }
+      }
+      try {
+        const g = await si.graphics()
+        const ctrl =
+          g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ?? g.controllers?.[0]
+        return {
+          percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
+          model: ctrl?.model || ctrl?.name || 'GPU',
+        }
+      } catch { /* ignore */ }
+      return _statsCache?.gpu ?? { percent: 0, model: 'GPU' }
+    })()
+
+    // 3. Memory, Network, Battery — all cheap, run in parallel
+    const [mem, netStats, wifiList, ifaceInfo, bat, disks, gpu] = await Promise.all([
+      si.mem(),
+      si.networkStats(),
+      si.wifiConnections().catch(() => []),
+      si.networkInterfaces('default').catch(() => null),
+      si.battery(),
+      si.fsSize(),
+      gpuProm,
+    ])
+
+    // Memory
+    const memory = {
+      totalGB: Number((mem.total / 1e9).toFixed(1)),
+      usedGB: Number(((mem.total - mem.available) / 1e9).toFixed(1)),
+      swapGB: Number((mem.swapused / 1e9).toFixed(1)),
+      pct: Math.round(((mem.total - mem.available) / mem.total) * 100),
+    }
+
+    // Network
+    const primary = netStats[0]
+    const wifiConn = wifiList.find((w) => w.iface === primary?.iface) ?? wifiList[0]
+    const iface = Array.isArray(ifaceInfo)
+      ? ifaceInfo.find((i) => i.iface === primary?.iface)
+      : ifaceInfo
+    const isWifi = !!wifiConn || iface?.type === 'wireless'
+    const network = primary
+      ? {
+          down: Math.max(0, primary.rx_sec ?? 0),
+          up: Math.max(0, primary.tx_sec ?? 0),
+          iface: primary.iface,
+          ssid: normalizeSsid(wifiConn?.ssid),
+          type: isWifi ? 'wifi' : 'wired',
+          ip: iface?.ip4 ?? null,
+          signalQuality: wifiConn?.quality ?? null,
+        }
+      : { down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null }
+
+    // Battery
+    const battery = {
+      hasBattery: bat.hasBattery,
+      percent: bat.percent,
+      isCharging: bat.isCharging,
+      acConnected: bat.acConnected,
+      timeRemaining: bat.timeRemaining ?? -1,
+    }
+
+    // Disk — keep only non-virtual mounts
+    const disk = disks
+      .filter((d) => !d.fs.startsWith('dev') && d.size > 0)
+      .map((d) => ({
+        fs: d.fs,
+        mount: d.mount,
+        totalGB: Number((d.size / 1e9).toFixed(1)),
+        usedGB: Number((d.used / 1e9).toFixed(1)),
+        freeGB: Number(((d.size - d.used) / 1e9).toFixed(1)),
+        pct: Math.round((d.used / d.size) * 100),
+      }))
+    const mainDisk = disk.find((d) => d.mount === '/') ?? disk[0] ?? null
+    const diskResult = mainDisk
+      ? {
+          totalGB: mainDisk.totalGB,
+          usedGB: mainDisk.usedGB,
+          freeGB: mainDisk.freeGB,
+          pct: mainDisk.pct,
+        }
+      : null
+
+    _statsCache = { cpu, gpu, memory, network, battery, disk: diskResult, fetchedAt: Date.now() }
+  } catch (err) {
+    console.error('[stats-sweep]', err.message)
+  }
+}
+
+// Prime the cache immediately then sweep on schedule
+sweepStats()
+setInterval(sweepStats, STATS_INTERVAL_MS)
+
+/** Return cached stats, doing a blocking fetch if cache is cold. */
+async function getStats(key) {
+  if (_statsCache && Date.now() - _statsCache.fetchedAt < STATS_TTL_MS) {
+    return _statsCache[key] ?? null
+  }
+  // Cold start or stale — wait for a fresh sweep
+  await sweepStats()
+  return _statsCache?.[key] ?? null
+}
+
 // ---------- IPC handlers (system stats) ----------
 
 ipcMain.handle('sys:platform', () => ({
@@ -172,130 +330,17 @@ ipcMain.handle('sys:platform', () => ({
   release: process.getSystemVersion?.() ?? '',
 }))
 
-ipcMain.handle('sys:cpu', async () => {
-  const [load, cpu] = await Promise.all([si.currentLoad(), si.cpu()])
-  return {
-    percent: Math.round(load.currentLoad),
-    cores: load.cpus?.map((c) => Math.round(c.load)) ?? [],
-    speedGhz: cpu.speed,
-    brand: cpu.manufacturer + ' ' + cpu.brand,
-  }
-})
+ipcMain.handle('sys:cpu', () => getStats('cpu'))
+ipcMain.handle('sys:gpu', () => getStats('gpu'))
+ipcMain.handle('sys:memory', () => getStats('memory'))
 
-// GPU model is expensive to fetch (system_profiler / si.graphics() can take seconds)
-// but the model name never changes during a session, so cache it after first lookup.
-let gpuModelCache = null
-async function getGpuModel() {
-  if (gpuModelCache) return gpuModelCache
-  try {
-    const g = await si.graphics()
-    const ctrl = g.controllers?.[0]
-    gpuModelCache = ctrl?.model || ctrl?.name || 'GPU'
-  } catch {
-    gpuModelCache = 'GPU'
-  }
-  return gpuModelCache
-}
-
-ipcMain.handle('sys:gpu', async () => {
-  // macOS: `ioreg -rc IOAccelerator` exposes "Device Utilization %" in the
-  // PerformanceStatistics dict — works without sudo on both Intel and Apple Silicon.
-  if (process.platform === 'darwin') {
-    try {
-      const { stdout } = await execAsync('ioreg -rc IOAccelerator', { timeout: 1500 })
-      const match = stdout.match(/"Device Utilization %"=(\d+)/)
-      if (match) {
-        const pct = parseInt(match[1], 10)
-        return {
-          percent: Math.max(0, Math.min(100, pct)),
-          model: await getGpuModel(),
-        }
-      }
-    } catch {
-      /* fall through */
-    }
-  }
-
-  // Cross-platform fallback — works on some Windows/NVIDIA/AMD drivers, often 0 on Linux.
-  try {
-    const g = await si.graphics()
-    const ctrl =
-      g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ?? g.controllers?.[0]
-    return {
-      percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
-      model: ctrl?.model || ctrl?.name || 'GPU',
-    }
-  } catch {
-    return { percent: 0, model: 'GPU' }
-  }
-})
-
-ipcMain.handle('sys:memory', async () => {
-  const m = await si.mem()
-  return {
-    totalGB: Number((m.total / 1e9).toFixed(1)),
-    usedGB: Number(((m.total - m.available) / 1e9).toFixed(1)),
-    swapGB: Number((m.swapused / 1e9).toFixed(1)),
-    pct: Math.round(((m.total - m.available) / m.total) * 100),
-  }
-})
-
-function normalizeSsid(raw) {
-  if (!raw || typeof raw !== 'string') return null
-  if (raw.toLowerCase().includes('redacted')) return null
-  return raw
-}
-
-ipcMain.handle('sys:network', async () => {
-  const [stats, wifi, ifaces] = await Promise.all([
-    si.networkStats(),
-    si.wifiConnections().catch(() => []),
-    si.networkInterfaces('default').catch(() => null),
-  ])
-  const primary = stats[0]
-  if (!primary) return { down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null }
-
-  const wifiConn = wifi.find((w) => w.iface === primary.iface) ?? wifi[0]
-  const ifaceInfo = Array.isArray(ifaces) ? ifaces.find((i) => i.iface === primary.iface) : ifaces
-  const isWifi = !!wifiConn || ifaceInfo?.type === 'wireless'
-
-  return {
-    down: Math.max(0, primary.rx_sec ?? 0),
-    up: Math.max(0, primary.tx_sec ?? 0),
-    iface: primary.iface,
-    ssid: normalizeSsid(wifiConn?.ssid),
-    type: isWifi ? 'wifi' : 'wired',
-    ip: ifaceInfo?.ip4 ?? null,
-    signalQuality: wifiConn?.quality ?? null,
-  }
-})
-
-ipcMain.handle('sys:battery', async () => {
-  const b = await si.battery()
-  return {
-    hasBattery: b.hasBattery,
-    percent: b.percent,
-    isCharging: b.isCharging,
-    acConnected: b.acConnected,
-    timeRemaining: b.timeRemaining ?? -1, // minutes, -1 = unknown/charging
-  }
-})
+ipcMain.handle('sys:network', () => getStats('network'))
+ipcMain.handle('sys:battery', () => getStats('battery'))
+ipcMain.handle('sys:disk', () => getStats('disk'))
 
 ipcMain.handle('sys:uptime', async () => {
   const t = await si.time()
-  return { uptime: t.uptime } // seconds since boot
-})
-
-ipcMain.handle('sys:disk', async () => {
-  const disks = await si.fsSize()
-  const main = disks.find((d) => d.mount === '/') ?? disks[0]
-  if (!main) return null
-  return {
-    totalGB: Number((main.size / 1e9).toFixed(1)),
-    usedGB: Number((main.used / 1e9).toFixed(1)),
-    freeGB: Number(((main.size - main.used) / 1e9).toFixed(1)),
-    pct: Math.round(main.use),
-  }
+  return { uptime: t.uptime } // seconds since boot — cheap, not cached
 })
 
 // Fire-and-forget: plays a macOS system sound. No-op on Windows.

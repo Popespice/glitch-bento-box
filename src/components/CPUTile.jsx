@@ -19,7 +19,7 @@ export default function CPUTile() {
     } catch {
       /* ignore */
     }
-  }, 2000)
+  }, 4000)
 
   const points = history
     .map((v, i) => {

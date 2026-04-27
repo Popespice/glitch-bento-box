@@ -60,7 +60,7 @@ export default function SystemPulseTile() {
     } catch {
       /* ignore */
     }
-  }, 2000)
+  }, 4000)
 
   return (
     <div className="tile pulse-tile">
