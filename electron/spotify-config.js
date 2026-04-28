@@ -10,5 +10,5 @@
 //   4. Check the Web API box, agree, save
 //   5. Copy the Client ID below
 
-export const SPOTIFY_CLIENT_ID = 'paste-your-client-id-here'
+export const SPOTIFY_CLIENT_ID = '2589832cc5134b8ea6dd84b122665967'
 export const SPOTIFY_REDIRECT_URI = 'bento://callback'
