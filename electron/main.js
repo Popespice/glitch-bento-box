@@ -197,115 +197,277 @@ function normalizeSsid(raw) {
   return raw
 }
 
-async function sweepStats() {
+// Resolve to `fallback` after `ms` so a single hung systeminformation call
+// can't stall the whole sweep. (E.g. si.networkStats() can hang indefinitely
+// on Windows.) Failed calls also resolve to `fallback`.
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
+const SYSTEM_DRIVE = (process.env.SystemDrive || 'C:').toUpperCase()
+
+// ---------- Windows-specific stat helpers ----------
+//
+// systeminformation's Windows backend has two gaps:
+//   1. si.graphics() doesn't populate `utilizationGpu`.
+//   2. si.networkStats() hangs (5s+) regardless of interface argument.
+// nvidia-smi covers (1) for NVIDIA cards, and `netstat -e` covers (2) with
+// a manual delta calculation.
+
+async function getGpuStatsWindows() {
+  let percent = null
+  let model = null
+  let powerDrawW = null
+  let powerLimitW = null
+  let temperatureGpu = null
+  let utilizationMemory = null
+
+  // nvidia-smi: gives us utilization.gpu (which si.graphics() omits) plus
+  // power.draw/power.limit/temperature in one cheap call. Sub-second on
+  // machines with NVIDIA drivers; throws ENOENT otherwise.
   try {
-    // 1. CPU — si.currentLoad() uses `top` on macOS (~50 ms)
-    const [load, cpuInfo] = await Promise.all([si.currentLoad(), si.cpu()])
-    const cpu = {
-      percent: Math.round(load.currentLoad),
-      cores: load.cpus?.map((c) => Math.round(c.load)) ?? [],
-      speedGhz: cpuInfo.speed,
-      brand: `${cpuInfo.manufacturer} ${cpuInfo.brand}`,
+    const { stdout } = await execAsync(
+      'nvidia-smi --query-gpu=utilization.gpu,power.draw,power.limit,temperature.gpu,name --format=csv,noheader,nounits',
+      { timeout: 2000 },
+    )
+    const line = stdout.split('\n').find((l) => l.trim().length > 0) ?? ''
+    const parts = line.split(',').map((p) => p.trim())
+    if (parts.length >= 5) {
+      percent = Number(parts[0])
+      powerDrawW = Number(parts[1])
+      powerLimitW = Number(parts[2])
+      temperatureGpu = Number(parts[3])
+      model = parts[4]
     }
+  } catch { /* nvidia-smi unavailable — fall through */ }
 
-    // 2. GPU — ioreg on macOS (~100–300 ms); run in parallel with other calls
-    const gpuProm = (async () => {
-      if (process.platform === 'darwin') {
-        try {
-          const { stdout } = await execAsync('ioreg -rc IOAccelerator', { timeout: 2000 })
-          const match = stdout.match(/"Device Utilization %"=(\d+)/)
-          if (match) {
-            return {
-              percent: Math.max(0, Math.min(100, parseInt(match[1], 10))),
-              model: await getGpuModel(),
-            }
-          }
-        } catch { /* fall through */ }
+  // si.graphics() supplements with utilizationMemory and (sometimes) the
+  // same power/temp numbers — useful as a fallback when nvidia-smi is missing.
+  try {
+    const g = await si.graphics()
+    const ctrl =
+      g.controllers?.find((c) => c.vendor?.toLowerCase().includes('nvidia')) ??
+      g.controllers?.[0]
+    if (ctrl) {
+      if (model == null) model = ctrl.model || ctrl.name || 'GPU'
+      if (powerDrawW == null && typeof ctrl.powerDraw === 'number') powerDrawW = ctrl.powerDraw
+      if (powerLimitW == null && typeof ctrl.powerLimit === 'number') powerLimitW = ctrl.powerLimit
+      if (temperatureGpu == null && typeof ctrl.temperatureGpu === 'number') {
+        temperatureGpu = ctrl.temperatureGpu
       }
-      try {
-        const g = await si.graphics()
-        const ctrl =
-          g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ?? g.controllers?.[0]
-        return {
-          percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
-          model: ctrl?.model || ctrl?.name || 'GPU',
-        }
-      } catch { /* ignore */ }
-      return _statsCache?.gpu ?? { percent: 0, model: 'GPU' }
-    })()
-
-    // 3. Memory, Network, Battery — all cheap, run in parallel
-    const [mem, netStats, wifiList, ifaceInfo, bat, disks, gpu] = await Promise.all([
-      si.mem(),
-      si.networkStats(),
-      si.wifiConnections().catch(() => []),
-      si.networkInterfaces('default').catch(() => null),
-      si.battery(),
-      si.fsSize(),
-      gpuProm,
-    ])
-
-    // Memory
-    const memory = {
-      totalGB: Number((mem.total / 1e9).toFixed(1)),
-      usedGB: Number(((mem.total - mem.available) / 1e9).toFixed(1)),
-      swapGB: Number((mem.swapused / 1e9).toFixed(1)),
-      pct: Math.round(((mem.total - mem.available) / mem.total) * 100),
+      if (typeof ctrl.utilizationMemory === 'number') utilizationMemory = ctrl.utilizationMemory
     }
+  } catch { /* ignore */ }
 
-    // Network
-    const primary = netStats[0]
-    const wifiConn = wifiList.find((w) => w.iface === primary?.iface) ?? wifiList[0]
-    const iface = Array.isArray(ifaceInfo)
-      ? ifaceInfo.find((i) => i.iface === primary?.iface)
-      : ifaceInfo
-    const isWifi = !!wifiConn || iface?.type === 'wireless'
-    const network = primary
-      ? {
-          down: Math.max(0, primary.rx_sec ?? 0),
-          up: Math.max(0, primary.tx_sec ?? 0),
-          iface: primary.iface,
-          ssid: normalizeSsid(wifiConn?.ssid),
-          type: isWifi ? 'wifi' : 'wired',
-          ip: iface?.ip4 ?? null,
-          signalQuality: wifiConn?.quality ?? null,
-        }
-      : { down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null }
-
-    // Battery
-    const battery = {
-      hasBattery: bat.hasBattery,
-      percent: bat.percent,
-      isCharging: bat.isCharging,
-      acConnected: bat.acConnected,
-      timeRemaining: bat.timeRemaining ?? -1,
-    }
-
-    // Disk — keep only non-virtual mounts
-    const disk = disks
-      .filter((d) => !d.fs.startsWith('dev') && d.size > 0)
-      .map((d) => ({
-        fs: d.fs,
-        mount: d.mount,
-        totalGB: Number((d.size / 1e9).toFixed(1)),
-        usedGB: Number((d.used / 1e9).toFixed(1)),
-        freeGB: Number(((d.size - d.used) / 1e9).toFixed(1)),
-        pct: Math.round((d.used / d.size) * 100),
-      }))
-    const mainDisk = disk.find((d) => d.mount === '/') ?? disk[0] ?? null
-    const diskResult = mainDisk
-      ? {
-          totalGB: mainDisk.totalGB,
-          usedGB: mainDisk.usedGB,
-          freeGB: mainDisk.freeGB,
-          pct: mainDisk.pct,
-        }
-      : null
-
-    _statsCache = { cpu, gpu, memory, network, battery, disk: diskResult, fetchedAt: Date.now() }
-  } catch (err) {
-    console.error('[stats-sweep]', err.message)
+  return {
+    percent: percent != null ? Math.max(0, Math.min(100, Math.round(percent))) : 0,
+    model: model ?? 'GPU',
+    powerDrawW,
+    powerLimitW,
+    temperatureGpu,
+    utilizationMemory,
   }
+}
+
+// Cross-sweep state for Windows network rate calculation. `netstat -e` returns
+// cumulative byte counters; we need two samples to compute a rate.
+let _lastNetSample = null
+
+async function getNetStatsWindows() {
+  const fallback =
+    _statsCache?.network ??
+    { down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null, signalQuality: null }
+  try {
+    const { stdout } = await execAsync('netstat -e', { timeout: 2000 })
+    const m = stdout.match(/Bytes\s+(\d+)\s+(\d+)/)
+    if (!m) return fallback
+    const rxBytes = Number(m[1])
+    const txBytes = Number(m[2])
+    const now = Date.now()
+    const last = _lastNetSample
+    _lastNetSample = { rxBytes, txBytes, t: now }
+    let down = 0
+    let up = 0
+    if (last && now > last.t) {
+      const elapsed = (now - last.t) / 1000
+      down = Math.max(0, (rxBytes - last.rxBytes) / elapsed)
+      up = Math.max(0, (txBytes - last.txBytes) / elapsed)
+    }
+    let iface = 'net'
+    let ip = null
+    let type = 'unknown'
+    try {
+      const i = await si.networkInterfaces('default')
+      const def = Array.isArray(i) ? i.find((x) => x.default) ?? i[0] : i
+      if (def) {
+        iface = def.iface
+        ip = def.ip4 ?? null
+        type = def.type === 'wireless' ? 'wifi' : 'wired'
+      }
+    } catch { /* ignore */ }
+    return { down, up, iface, ssid: null, type, ip, signalQuality: null }
+  } catch {
+    return fallback
+  }
+}
+
+async function sweepStats() {
+  // Each si.*() call gets its own timeout + fallback so one slow call can't
+  // poison the whole sweep. Last-known-good values come from _statsCache.
+  const prev = _statsCache
+  const isWin = process.platform === 'win32'
+
+  // 1. CPU — cross-platform via systeminformation
+  const [load, cpuInfo] = await Promise.all([
+    withTimeout(si.currentLoad(), 2500, null),
+    withTimeout(si.cpu(), 2500, null),
+  ])
+  const cpu = load
+    ? {
+        percent: Math.round(load.currentLoad),
+        cores: load.cpus?.map((c) => Math.round(c.load)) ?? [],
+        speedGhz: cpuInfo?.speed ?? prev?.cpu?.speedGhz ?? 0,
+        brand: cpuInfo
+          ? `${cpuInfo.manufacturer} ${cpuInfo.brand}`
+          : (prev?.cpu?.brand ?? ''),
+      }
+    : (prev?.cpu ?? { percent: 0, cores: [], speedGhz: 0, brand: '' })
+
+  // 2. GPU — Windows uses nvidia-smi + si.graphics() (utilizationGpu missing
+  // from si on Windows); macOS uses ioreg; everything else falls back to si.
+  const gpuProm = isWin
+    ? getGpuStatsWindows()
+    : (async () => {
+        if (process.platform === 'darwin') {
+          try {
+            const { stdout } = await execAsync('ioreg -rc IOAccelerator', { timeout: 2000 })
+            const match = stdout.match(/"Device Utilization %"=(\d+)/)
+            if (match) {
+              return {
+                percent: Math.max(0, Math.min(100, parseInt(match[1], 10))),
+                model: await getGpuModel(),
+              }
+            }
+          } catch { /* fall through */ }
+        }
+        try {
+          const g = await si.graphics()
+          const ctrl =
+            g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ?? g.controllers?.[0]
+          return {
+            percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
+            model: ctrl?.model || ctrl?.name || 'GPU',
+          }
+        } catch { /* ignore */ }
+        return prev?.gpu ?? { percent: 0, model: 'GPU' }
+      })()
+
+  // 3. Network — Windows uses `netstat -e` with a delta calc (si.networkStats
+  // hangs on Windows). macOS keeps the existing si-based path.
+  const netProm = isWin
+    ? getNetStatsWindows()
+    : (async () => {
+        const [netStats, wifiList, ifaceInfo] = await Promise.all([
+          withTimeout(si.networkStats(), 2000, []),
+          withTimeout(si.wifiConnections(), 2000, []),
+          withTimeout(si.networkInterfaces('default'), 2000, null),
+        ])
+        const primary = Array.isArray(netStats) ? netStats[0] : null
+        const wifiConn =
+          (Array.isArray(wifiList) &&
+            (wifiList.find((w) => w.iface === primary?.iface) ?? wifiList[0])) ||
+          null
+        const iface = Array.isArray(ifaceInfo)
+          ? ifaceInfo.find((i) => i.iface === primary?.iface)
+          : ifaceInfo
+        const isWifi = !!wifiConn || iface?.type === 'wireless'
+        return primary
+          ? {
+              down: Math.max(0, primary.rx_sec ?? 0),
+              up: Math.max(0, primary.tx_sec ?? 0),
+              iface: primary.iface,
+              ssid: normalizeSsid(wifiConn?.ssid),
+              type: isWifi ? 'wifi' : 'wired',
+              ip: iface?.ip4 ?? null,
+              signalQuality: wifiConn?.quality ?? null,
+            }
+          : (prev?.network ?? {
+              down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null,
+            })
+      })()
+
+  // 4. Memory, Battery, Disk — cross-platform via systeminformation
+  const [mem, bat, disks, gpu, network] = await Promise.all([
+    withTimeout(si.mem(), 2000, null),
+    withTimeout(si.battery(), 2000, null),
+    withTimeout(si.fsSize(), 2500, []),
+    withTimeout(gpuProm, 3000, prev?.gpu ?? { percent: 0, model: 'GPU' }),
+    withTimeout(netProm, 3000, prev?.network ?? {
+      down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null,
+    }),
+  ])
+
+  // Memory
+  const memory = mem
+    ? {
+        totalGB: Number((mem.total / 1e9).toFixed(1)),
+        usedGB: Number(((mem.total - mem.available) / 1e9).toFixed(1)),
+        swapGB: Number((mem.swapused / 1e9).toFixed(1)),
+        pct: Math.round(((mem.total - mem.available) / mem.total) * 100),
+      }
+    : (prev?.memory ?? { totalGB: 0, usedGB: 0, swapGB: 0, pct: 0 })
+
+  // Battery — on a desktop with no battery, surface GPU power-draw fields so
+  // the BatteryTile can render a "POWER" view instead of a useless "AC ONLY".
+  const batteryBase = bat
+    ? {
+        hasBattery: bat.hasBattery,
+        percent: bat.percent,
+        isCharging: bat.isCharging,
+        acConnected: bat.acConnected,
+        timeRemaining: bat.timeRemaining ?? -1,
+      }
+    : (prev?.battery ?? {
+        hasBattery: false,
+        percent: 0,
+        isCharging: false,
+        acConnected: true,
+        timeRemaining: -1,
+      })
+  const battery =
+    !batteryBase.hasBattery && gpu?.powerDrawW != null && gpu?.powerLimitW
+      ? { ...batteryBase, powerDrawW: gpu.powerDrawW, powerLimitW: gpu.powerLimitW }
+      : batteryBase
+
+  // Disk — keep only non-virtual mounts
+  const diskList = (disks ?? [])
+    .filter((d) => !d.fs.startsWith('dev') && d.size > 0)
+    .map((d) => ({
+      fs: d.fs,
+      mount: d.mount,
+      totalGB: Number((d.size / 1e9).toFixed(1)),
+      usedGB: Number((d.used / 1e9).toFixed(1)),
+      freeGB: Number(((d.size - d.used) / 1e9).toFixed(1)),
+      pct: Math.round((d.used / d.size) * 100),
+    }))
+  // Pick the system drive: '/' on Unix, the SystemDrive (e.g. 'C:') on Windows.
+  const mainDisk =
+    diskList.find((d) => d.mount === '/' || d.mount?.toUpperCase() === SYSTEM_DRIVE) ??
+    diskList[0] ??
+    null
+  const diskResult = mainDisk
+    ? {
+        totalGB: mainDisk.totalGB,
+        usedGB: mainDisk.usedGB,
+        freeGB: mainDisk.freeGB,
+        pct: mainDisk.pct,
+      }
+    : (prev?.disk ?? null)
+
+  _statsCache = { cpu, gpu, memory, network, battery, disk: diskResult, fetchedAt: Date.now() }
 }
 
 // Prime the cache immediately then sweep on schedule
