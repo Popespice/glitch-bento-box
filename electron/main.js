@@ -82,6 +82,7 @@ let _googleAccess = null // { token: string, expiresAt: number }
 let _pendingGCalConnect = null // { resolve, reject, state, timeoutId } during Google OAuth flow
 let _caffeinateProc = null // ChildProcess | null — caffeinate -d background process
 let _btHelperPath = null // string | null — path to compiled Swift BT helper binary
+let _wifiAdapterName = null // string | null — cached Windows Wi-Fi interface name
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
@@ -1473,9 +1474,129 @@ ipcMain.handle('sys:calendar-next-event', async () => {
 //  QUICK SETTINGS — WiFi, Bluetooth, Caffeinate, Focus
 // ============================================================
 
+// ---------- Windows Wi-Fi helpers ----------
+//
+// `netsh wlan show interfaces` is unreliable on some Windows configs; we use
+// `netsh interface show interface` (always works) for adapter state and
+// Get-NetConnectionProfile for the connected SSID.
+// Toggling requires admin — try direct first, fall back to UAC elevation.
+
+async function getWifiStatusWindows() {
+  try {
+    const { stdout } = await execAsync('netsh interface show interface', { timeout: 2000 })
+    // Find the line for the Wi-Fi adapter (case-insensitive name match)
+    const adapterLine = stdout.split('\n').find(
+      (l) => l.toLowerCase().includes('wi-fi') || l.toLowerCase().includes('wireless'),
+    )
+    if (!adapterLine) return { on: false, ssid: '' }
+
+    const isDisabled = adapterLine.toLowerCase().includes('disabled')
+    if (isDisabled) return { on: false, ssid: '' }
+
+    // Extract interface name — everything after the Type column (Dedicated/etc.)
+    const nameMatch = adapterLine.match(/(?:Dedicated|Loopback|PPP)\s+(\S[\s\S]+?)\s*$/)
+    const adapterName = nameMatch ? nameMatch[1].trim() : null
+    if (adapterName && !_wifiAdapterName) _wifiAdapterName = adapterName
+
+    const isConnected = adapterLine.toLowerCase().includes(' connected')
+    if (!isConnected) return { on: true, ssid: '' }
+
+    // SSID from the connection profile
+    const name = _wifiAdapterName
+    if (!name) return { on: true, ssid: '' }
+    try {
+      const { stdout: p } = await execAsync(
+        `powershell -NoProfile -Command "(Get-NetConnectionProfile -InterfaceAlias '${name}' -ErrorAction SilentlyContinue).Name"`,
+        { timeout: 2000 },
+      )
+      return { on: true, ssid: p.trim() || '' }
+    } catch {
+      return { on: true, ssid: '' }
+    }
+  } catch {
+    return { on: false, ssid: '' }
+  }
+}
+
+async function toggleWifiWindows(on) {
+  // Ensure we have the adapter name (status populates _wifiAdapterName as a side-effect)
+  if (!_wifiAdapterName) await getWifiStatusWindows()
+  const adapter = _wifiAdapterName
+  if (!adapter) return { ok: false, error: 'No Wi-Fi adapter found' }
+  const action = on ? 'enable' : 'disable'
+  // Try without elevation (succeeds if process already has admin rights)
+  try {
+    await execAsync(`netsh interface set interface "${adapter}" ${action}`, { timeout: 5000 })
+    return { ok: true }
+  } catch { /* needs elevation */ }
+  // Elevate via UAC — user sees a Windows admin-consent dialog
+  try {
+    await execAsync(
+      `powershell -NoProfile -Command "Start-Process netsh -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList 'interface set interface ""${adapter}"" ${action}'"`,
+      { timeout: 30000 },
+    )
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Toggle failed' }
+  }
+}
+
+// ---------- Windows Bluetooth helpers ----------
+//
+// The WinRT Radio API requires UWP capability declarations that Electron
+// doesn't have, so we use Get-PnpDevice / Enable|Disable-PnpDevice instead.
+// The USB-based host controller (VID 8087 for Intel, etc.) represents the
+// radio; its Status 'OK' means the radio is active.
+
+async function getBtStatusWindows() {
+  try {
+    const { stdout } = await execAsync(
+      `powershell -NoProfile -Command "Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB*' } | Select-Object -First 1 -ExpandProperty Status"`,
+      { timeout: 3000 },
+    )
+    const status = stdout.trim()
+    return { on: status === 'OK', available: status.length > 0 }
+  } catch {
+    return { on: false, available: false }
+  }
+}
+
+async function toggleBtWindows(on) {
+  try {
+    const { stdout: idOut } = await execAsync(
+      `powershell -NoProfile -Command "Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB*' } | Select-Object -First 1 -ExpandProperty InstanceId"`,
+      { timeout: 3000 },
+    )
+    const instanceId = idOut.trim()
+    if (!instanceId) return { ok: false, error: 'Bluetooth adapter not found' }
+    const action = on ? 'Enable-PnpDevice' : 'Disable-PnpDevice'
+    // Write a temp ps1 to avoid quoting InstanceId (which contains & and \)
+    const scriptPath = path.join(app.getPath('temp'), 'bento-bt-toggle.ps1')
+    await fs.promises.writeFile(scriptPath, `${action} -InstanceId '${instanceId}' -Confirm:$false`)
+    // Try without elevation first
+    try {
+      await execAsync(
+        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`,
+        { timeout: 10000 },
+      )
+      return { ok: true }
+    } catch { /* needs elevation */ }
+    // Elevate via UAC
+    const escapedPath = scriptPath.replace(/\\/g, '\\\\')
+    await execAsync(
+      `powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""${escapedPath}"""`,
+      { timeout: 30000 },
+    )
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Toggle failed' }
+  }
+}
+
 // ---------- WiFi ----------
 
 ipcMain.handle('sys:wifi-status', async () => {
+  if (process.platform === 'win32') return getWifiStatusWindows()
   try {
     const { stdout } = await execAsync('networksetup -getairportpower en0', { timeout: 3000 })
     const on = stdout.includes(': On')
@@ -1492,6 +1613,7 @@ ipcMain.handle('sys:wifi-status', async () => {
 })
 
 ipcMain.handle('sys:wifi-toggle', async (_event, on) => {
+  if (process.platform === 'win32') return toggleWifiWindows(on)
   const subcmd = `networksetup -setairportpower en0 ${on ? 'on' : 'off'}`
   try {
     await execAsync(`osascript -e 'do shell script "${subcmd}" with administrator privileges'`, {
@@ -1602,6 +1724,7 @@ async function runBTHelper(cmd) {
 }
 
 ipcMain.handle('sys:bluetooth-status', async () => {
+  if (process.platform === 'win32') return getBtStatusWindows()
   try {
     const out = await runBTHelper('status')
     if (out === 'on' || out === 'off') return { on: out === 'on', available: true }
@@ -1619,6 +1742,7 @@ ipcMain.handle('sys:bluetooth-status', async () => {
 })
 
 ipcMain.handle('sys:bluetooth-toggle', async (_event, on) => {
+  if (process.platform === 'win32') return toggleBtWindows(on)
   try {
     await runBTHelper(on ? 'on' : 'off')
     return { ok: true }
