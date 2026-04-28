@@ -8,7 +8,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import si from 'systeminformation'
 import Store from 'electron-store'
-import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI } from './spotify-config.js'
+import { SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI } from './spotify-config.js'
 import {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
@@ -790,12 +790,13 @@ ipcMain.handle('sys:github-heatmap', async () => {
 
 // ---------- Spotify ----------
 //
-// Auth flow: bundled-credential OAuth Authorization Code.
+// Auth flow: OAuth 2.0 Authorization Code with PKCE (no client_secret).
 // The user clicks Connect → main opens a minimal BrowserWindow pointed at the
-// Spotify authorize URL → user approves in that window → Spotify issues a
-// redirect to bento://callback?code=...&state=... → Electron's will-redirect /
-// will-navigate events intercept the bento:// URL before the OS ever sees it →
-// handleSpotifyCallback exchanges the code for tokens → window closes.
+// Spotify authorize URL with a code_challenge → user approves in that window
+// → Spotify issues a redirect to bento://callback?code=...&state=... →
+// Electron's will-redirect / will-navigate events intercept the bento:// URL
+// before the OS ever sees it → handleSpotifyCallback exchanges the code (with
+// the matching code_verifier) for tokens → window closes.
 //
 // Using an in-app window (rather than shell.openExternal + OS protocol routing)
 // is reliable in both dev and production: no Info.plist registration required,
@@ -805,21 +806,30 @@ ipcMain.handle('sys:github-heatmap', async () => {
 // + display name + everything else stays in main-process memory or is never
 // requested at all. See store defaults at the top of this file.
 
-const SPOTIFY_BASIC_AUTH = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString(
-  'base64'
-)
-
 const SPOTIFY_SCOPE = 'user-read-currently-playing user-read-playback-state'
 const CONNECT_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes — abandon if user wanders off
 
+// PKCE: client generates a random verifier, sends sha256(verifier) as the
+// challenge in the authorize request, and proves possession by sending the
+// raw verifier back in the token exchange. No client_secret needed.
+function generateCodeVerifier() {
+  // 64 random bytes → ~86 base64url chars, well within the 43–128 spec range.
+  return crypto.randomBytes(64).toString('base64url')
+}
+
+function computeCodeChallenge(verifier) {
+  return crypto.createHash('sha256').update(verifier).digest('base64url')
+}
+
+// Token exchange (both authorization_code and refresh_token grants). PKCE
+// requires client_id in the body and forbids Basic auth, so callers pass
+// code_verifier (for code grant) or just refresh_token (for refresh).
 async function exchangeSpotifyToken(params) {
+  const body = new URLSearchParams({ ...params, client_id: SPOTIFY_CLIENT_ID })
   const res = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
-    headers: {
-      Authorization: `Basic ${SPOTIFY_BASIC_AUTH}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams(params).toString(),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -910,6 +920,7 @@ async function handleSpotifyCallback(url) {
       grant_type: 'authorization_code',
       code,
       redirect_uri: SPOTIFY_REDIRECT_URI,
+      code_verifier: _pendingConnect.codeVerifier,
     })
     // Persist ONLY the refresh token. Access token + expiry stay in memory.
     store.set('spotify.refreshToken', payload.refresh_token)
@@ -926,20 +937,19 @@ async function handleSpotifyCallback(url) {
 }
 
 ipcMain.handle('spotify:connect', async () => {
-  // Refuse to start if credentials aren't set — opening the auth window with
-  // placeholder values just shows a Spotify error page with no redirect, which
+  // Refuse to start if the client_id isn't set — opening the auth window with
+  // a placeholder just shows a Spotify error page with no redirect, which
   // wedges the UI until the user finds and closes the orphaned window.
   if (!SPOTIFY_CLIENT_ID || SPOTIFY_CLIENT_ID.startsWith('paste-')) {
-    return { ok: false, error: 'Spotify not configured — set credentials in electron/spotify-config.js' }
-  }
-  if (!SPOTIFY_CLIENT_SECRET || SPOTIFY_CLIENT_SECRET.startsWith('paste-')) {
-    return { ok: false, error: 'Spotify not configured — set credentials in electron/spotify-config.js' }
+    return { ok: false, error: 'Spotify not configured — set SPOTIFY_CLIENT_ID in electron/spotify-config.js' }
   }
 
   // Supersede any orphaned in-flight connect (e.g. from a previous attempt
   // where the auth window got hidden and the user reopened Settings).
   if (_pendingConnect?.cancel) _pendingConnect.cancel(new Error('Superseded'))
 
+  const codeVerifier = generateCodeVerifier()
+  const codeChallenge = computeCodeChallenge(codeVerifier)
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL('https://accounts.spotify.com/authorize')
   authUrl.searchParams.set('response_type', 'code')
@@ -947,6 +957,8 @@ ipcMain.handle('spotify:connect', async () => {
   authUrl.searchParams.set('redirect_uri', SPOTIFY_REDIRECT_URI)
   authUrl.searchParams.set('scope', SPOTIFY_SCOPE)
   authUrl.searchParams.set('state', state)
+  authUrl.searchParams.set('code_challenge', codeChallenge)
+  authUrl.searchParams.set('code_challenge_method', 'S256')
   authUrl.searchParams.set('show_dialog', 'true')
 
   return new Promise((resolve, reject) => {
@@ -976,7 +988,7 @@ ipcMain.handle('spotify:connect', async () => {
       cleanup(new Error('Connect timed out — window closed?'))
     }, CONNECT_TIMEOUT_MS)
 
-    _pendingConnect = { resolve, reject, state, timeoutId, cancel: cleanup }
+    _pendingConnect = { resolve, reject, state, timeoutId, cancel: cleanup, codeVerifier }
 
     // Intercept the bento:// redirect before the webview tries to navigate to it.
     const interceptRedirect = (_event, url) => {

@@ -25,6 +25,6 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
-electron/spotify-config.js
 electron/google-calendar-config.js
-# electron/github-config.js is now tracked — Device Flow client_id is public
+# spotify-config.js and github-config.js are tracked — PKCE / Device Flow
+# client IDs are public identifiers and don't include secrets
