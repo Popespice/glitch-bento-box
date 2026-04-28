@@ -18,6 +18,17 @@ A pixel-art developer dashboard for macOS and Windows. Live system stats, Spotif
 
 ---
 
+## Privacy
+
+**Bento collects zero data. Nothing about you, your system, or your activity ever leaves your machine.**
+
+- All OAuth tokens (GitHub, Spotify, Google) are stored exclusively in your local app data directory via `electron-store`. They are never transmitted to the author or any third party.
+- API calls to GitHub, Spotify, Google Calendar, and the weather service are made directly from your machine to those services. There is no proxy, no relay, and no backend server involved.
+- No analytics. No telemetry. No crash reporting. No usage tracking of any kind.
+- The author of Bento has no server, receives no data, and has no visibility into what you do with the app.
+
+---
+
 ## Using Bento
 
 ### Window
