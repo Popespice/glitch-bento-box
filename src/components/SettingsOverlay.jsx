@@ -14,12 +14,13 @@ export default function SettingsOverlay({ onClose }) {
   const [saved, setSaved] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
 
-  // GitHub PAT state
+  // GitHub OAuth state (Device Flow)
   const [githubConnected, setGithubConnected] = useState(false)
-  const [githubSaving, setGithubSaving] = useState(false)
   const [githubLogin, setGithubLogin] = useState('')
   const [githubError, setGithubError] = useState('')
-  const [githubPat, setGithubPat] = useState('')
+  const [githubAwaiting, setGithubAwaiting] = useState(false)
+  const [githubUserCode, setGithubUserCode] = useState('')
+  const [githubVerificationUri, setGithubVerificationUri] = useState('')
 
   // Spotify state — credentials are bundled, so this is just connect/disconnect.
   const [spotifyConnected, setSpotifyConnected] = useState(false)
@@ -81,6 +82,25 @@ export default function SettingsOverlay({ onClose }) {
     refreshCalendarStatus()
   }, [])
 
+  // Listen for GitHub Device Flow completion (sent from main process when
+  // GitHub finally returns an access token or the flow fails/expires).
+  useEffect(() => {
+    if (!sys.onGithubAuthResult) return
+    const unsubscribe = sys.onGithubAuthResult((result) => {
+      setGithubAwaiting(false)
+      setGithubUserCode('')
+      setGithubVerificationUri('')
+      if (result?.ok) {
+        setGithubError('')
+        refreshGithubStatus()
+        dispatchSettingsChanged(['github'])
+      } else {
+        setGithubError(result?.error || 'Authorization failed')
+      }
+    })
+    return unsubscribe
+  }, [])
+
   // Escape key to close
   useEffect(() => {
     const onKey = (e) => {
@@ -121,24 +141,31 @@ export default function SettingsOverlay({ onClose }) {
     if (e.key === 'Enter') geocode(locationQuery)
   }
 
-  const handleGithubSave = async () => {
-    if (!githubPat.trim()) return
-    setGithubSaving(true)
+  const handleGithubConnect = async () => {
     setGithubError('')
     try {
-      const result = await sys.githubConnect(githubPat.trim())
+      const result = await sys.githubConnectStart()
       if (result?.ok) {
-        setGithubPat('') // clear from input after saving
-        await refreshGithubStatus()
-        dispatchSettingsChanged(['github'])
+        setGithubUserCode(result.userCode || '')
+        setGithubVerificationUri(result.verificationUri || '')
+        setGithubAwaiting(true)
       } else {
-        setGithubError(result?.error || 'Token validation failed')
+        setGithubError(result?.error || 'Sign-in failed to start')
       }
     } catch (err) {
-      setGithubError(err?.message || 'Token validation failed')
-    } finally {
-      setGithubSaving(false)
+      setGithubError(err?.message || 'Sign-in failed to start')
     }
+  }
+
+  const handleGithubReopenBrowser = () => {
+    if (githubVerificationUri) sys.openExternal?.(githubVerificationUri)
+  }
+
+  const handleGithubCancel = async () => {
+    await sys.githubConnectCancel?.()
+    setGithubAwaiting(false)
+    setGithubUserCode('')
+    setGithubVerificationUri('')
   }
 
   const handleGithubDisconnect = async () => {
@@ -330,37 +357,46 @@ export default function SettingsOverlay({ onClose }) {
                 DISCONNECT
               </button>
             </div>
-          ) : (
+          ) : githubAwaiting ? (
             <>
-              <input
-                className="settings-input"
-                type="password"
-                placeholder="Paste a Personal Access Token"
-                value={githubPat}
-                onChange={(e) => setGithubPat(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleGithubSave()}
-                autoComplete="off"
-                spellCheck={false}
-              />
+              <div className="settings-github-code-row">
+                <span className="settings-status">CODE IN BROWSER:</span>
+                <span className="settings-github-code">{githubUserCode}</span>
+              </div>
               <div className="settings-spotify-row">
-                {githubSaving && <span className="settings-status">VALIDATING…</span>}
-                {!githubSaving && githubError && (
-                  <span className="settings-status settings-status--err">{githubError}</span>
-                )}
-                {!githubSaving && !githubError && (
-                  <span className="settings-status">NOT CONNECTED</span>
-                )}
+                <span className="settings-status">WAITING FOR AUTHORIZATION…</span>
                 <button
-                  className="settings-button"
-                  onClick={handleGithubSave}
-                  disabled={githubSaving || !githubPat.trim()}
+                  className="settings-button settings-button--ghost"
+                  onClick={handleGithubReopenBrowser}
                 >
-                  SAVE TOKEN
+                  REOPEN ↗
+                </button>
+                <button
+                  className="settings-button settings-button--ghost"
+                  onClick={handleGithubCancel}
+                >
+                  CANCEL
                 </button>
               </div>
               <span className="settings-hint">
-                Generate at github.com/settings/tokens — needs <code>read:user</code> scope. Falls
-                back to gh CLI if blank.
+                Verify this code matches the one shown in your browser, then click Authorize.
+              </span>
+            </>
+          ) : (
+            <>
+              <div className="settings-spotify-row">
+                {githubError ? (
+                  <span className="settings-status settings-status--err">{githubError}</span>
+                ) : (
+                  <span className="settings-status">NOT CONNECTED</span>
+                )}
+                <button className="settings-button" onClick={handleGithubConnect}>
+                  SIGN IN WITH GITHUB
+                </button>
+              </div>
+              <span className="settings-hint">
+                Opens GitHub in your browser. Bento only requests the <code>read:user</code> scope and
+                stores the access token locally.
               </span>
             </>
           )}

@@ -1163,6 +1163,25 @@ body,
   opacity: 0.75;
 }
 
+/* GitHub Device Flow user-code display: the XXXX-XXXX one-time code shown
+   while waiting for browser authorization. Big and monospaced so the user
+   can verify it matches what GitHub shows them. */
+.settings-github-code-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 6px;
+}
+
+.settings-github-code {
+  font-family: 'Space Mono', monospace;
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
 .settings-calendar-tabs {
   display: flex;
   gap: 6px;

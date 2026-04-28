@@ -20,10 +20,17 @@ contextBridge.exposeInMainWorld('bento', {
   spotifyConnect: () => ipcRenderer.invoke('spotify:connect'),
   spotifyDisconnect: () => ipcRenderer.invoke('spotify:disconnect'),
 
-  // GitHub PAT
-  githubConnect: (pat) => ipcRenderer.invoke('github:connect', pat),
+  // GitHub OAuth (Device Flow)
+  githubConnectStart: () => ipcRenderer.invoke('github:connect-start'),
+  githubConnectCancel: () => ipcRenderer.invoke('github:connect-cancel'),
   githubDisconnect: () => ipcRenderer.invoke('github:disconnect'),
   githubStatus: () => ipcRenderer.invoke('github:status'),
+  onGithubAuthResult: (cb) => {
+    const handler = (_event, data) => cb(data)
+    ipcRenderer.on('github:auth-result', handler)
+    return () => ipcRenderer.removeListener('github:auth-result', handler)
+  },
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
 
   // Calendar (CalDAV: iCloud + Google)
   calendarStatus: () => ipcRenderer.invoke('calendar:status'),

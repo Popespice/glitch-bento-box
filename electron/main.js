@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exec, spawn } from 'node:child_process'
@@ -14,6 +14,7 @@ import {
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI,
 } from './google-calendar-config.js'
+import { GITHUB_CLIENT_ID } from './github-config.js'
 import { createDAVClient } from 'tsdav'
 import nodeIcal from 'node-ical'
 
@@ -83,6 +84,7 @@ let _pendingGCalConnect = null // { resolve, reject, state, timeoutId } during G
 let _caffeinateProc = null // ChildProcess | null — caffeinate -d background process
 let _btHelperPath = null // string | null — path to compiled Swift BT helper binary
 let _wifiAdapterName = null // string | null — cached Windows Wi-Fi interface name
+let _githubDeviceFlow = null // { deviceCode, timerId, abort } during active GitHub Device Flow
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
@@ -1046,27 +1048,134 @@ ipcMain.handle('sys:now-playing', async () => {
 // and we validate it once by hitting api.github.com/user to resolve the login.
 // Token is stored in electron-store; no rebuild or OAuth App required.
 
-ipcMain.handle('github:connect', async (_event, pat) => {
-  if (!pat || typeof pat !== 'string' || !pat.trim()) {
-    return { ok: false, error: 'No token provided' }
+// GitHub OAuth Device Flow — same UX as `gh auth login -w`. The user clicks
+// Sign In, the OS browser opens to github.com/login/device with the user code
+// pre-filled, they click Authorize, and we poll until GitHub gives us an
+// access token. No client_secret, no callback URL, identical on Mac/Windows.
+
+ipcMain.handle('github:connect-start', async () => {
+  // Cancel any in-flight flow before starting a new one
+  if (_githubDeviceFlow) {
+    if (_githubDeviceFlow.timerId) clearTimeout(_githubDeviceFlow.timerId)
+    _githubDeviceFlow.abort = true
+    _githubDeviceFlow = null
   }
-  const token = pat.trim()
+
+  if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID.startsWith('paste-')) {
+    return { ok: false, error: 'GitHub OAuth not configured — set GITHUB_CLIENT_ID in electron/github-config.js' }
+  }
+
+  let codeData
   try {
-    const res = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    const res = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }),
     })
-    if (res.status === 401) return { ok: false, error: 'Token invalid or expired' }
-    if (!res.ok) return { ok: false, error: `GitHub API error: ${res.status}` }
-    const user = await res.json()
-    const login = user.login || ''
-    store.set('github.accessToken', token)
-    store.set('github.login', login)
-    _heatmapCache = null
-    _heatmapFetchedAt = 0
-    return { ok: true, login }
+    if (!res.ok) return { ok: false, error: `GitHub responded ${res.status}` }
+    codeData = await res.json()
   } catch (err) {
     return { ok: false, error: err.message }
   }
+
+  const { device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval } = codeData
+  if (!device_code || !user_code) {
+    return { ok: false, error: 'GitHub did not return device flow fields' }
+  }
+
+  const fullUri = verification_uri_complete || verification_uri || 'https://github.com/login/device'
+  const expiresAt = Date.now() + (expires_in || 900) * 1000
+
+  // Auto-open the OS browser. If this fails (e.g. no default browser set) the
+  // user can still copy the URL from the renderer's "Reopen" button.
+  shell.openExternal(fullUri).catch(() => {})
+
+  const flow = { deviceCode: device_code, abort: false, timerId: null }
+  _githubDeviceFlow = flow
+  let pollIntervalMs = (interval || 5) * 1000
+
+  const poll = async () => {
+    if (flow.abort) return
+    if (Date.now() > expiresAt) {
+      _githubDeviceFlow = null
+      mainWindow?.webContents.send('github:auth-result', { ok: false, error: 'Code expired' })
+      return
+    }
+    try {
+      const res = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: GITHUB_CLIENT_ID,
+          device_code,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      })
+      const data = await res.json()
+
+      if (data.access_token) {
+        let login = ''
+        try {
+          const ur = await fetch('https://api.github.com/user', {
+            headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/vnd.github+json' },
+          })
+          if (ur.ok) login = (await ur.json()).login || ''
+        } catch { /* token still valid even if /user lookup fails */ }
+        store.set('github.accessToken', data.access_token)
+        store.set('github.login', login)
+        _heatmapCache = null
+        _heatmapFetchedAt = 0
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', { ok: true, login })
+        return
+      }
+
+      // Per spec: authorization_pending → keep polling; slow_down → +5s; everything else → fail
+      if (data.error === 'authorization_pending') {
+        // no-op, keep polling at current interval
+      } else if (data.error === 'slow_down') {
+        pollIntervalMs += 5000
+      } else if (data.error === 'expired_token') {
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', { ok: false, error: 'Code expired' })
+        return
+      } else if (data.error === 'access_denied') {
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', { ok: false, error: 'Authorization denied' })
+        return
+      } else if (data.error) {
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', {
+          ok: false,
+          error: data.error_description || data.error,
+        })
+        return
+      }
+    } catch { /* transient network error — keep polling */ }
+
+    if (!flow.abort) flow.timerId = setTimeout(poll, pollIntervalMs)
+  }
+
+  flow.timerId = setTimeout(poll, pollIntervalMs)
+  return { ok: true, userCode: user_code, verificationUri: fullUri, expiresAt }
+})
+
+ipcMain.handle('github:connect-cancel', () => {
+  if (_githubDeviceFlow) {
+    if (_githubDeviceFlow.timerId) clearTimeout(_githubDeviceFlow.timerId)
+    _githubDeviceFlow.abort = true
+    _githubDeviceFlow = null
+  }
+  return { ok: true }
+})
+
+// Open a github.com URL in the user's default browser — used by the renderer
+// to "reopen" the device-flow verification page if they accidentally close it.
+ipcMain.handle('app:open-external', (_event, url) => {
+  if (typeof url !== 'string') return { ok: false }
+  if (!/^https:\/\/github\.com\//i.test(url)) return { ok: false, error: 'Only github.com URLs allowed' }
+  shell.openExternal(url).catch(() => {})
+  return { ok: true }
 })
 
 ipcMain.handle('github:disconnect', () => {
