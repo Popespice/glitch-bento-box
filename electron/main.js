@@ -926,9 +926,19 @@ async function handleSpotifyCallback(url) {
 }
 
 ipcMain.handle('spotify:connect', async () => {
-  if (_pendingConnect) {
-    return { ok: false, error: 'Connect already in progress' }
+  // Refuse to start if credentials aren't set — opening the auth window with
+  // placeholder values just shows a Spotify error page with no redirect, which
+  // wedges the UI until the user finds and closes the orphaned window.
+  if (!SPOTIFY_CLIENT_ID || SPOTIFY_CLIENT_ID.startsWith('paste-')) {
+    return { ok: false, error: 'Spotify not configured — set credentials in electron/spotify-config.js' }
   }
+  if (!SPOTIFY_CLIENT_SECRET || SPOTIFY_CLIENT_SECRET.startsWith('paste-')) {
+    return { ok: false, error: 'Spotify not configured — set credentials in electron/spotify-config.js' }
+  }
+
+  // Supersede any orphaned in-flight connect (e.g. from a previous attempt
+  // where the auth window got hidden and the user reopened Settings).
+  if (_pendingConnect?.cancel) _pendingConnect.cancel(new Error('Superseded'))
 
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL('https://accounts.spotify.com/authorize')
@@ -942,10 +952,13 @@ ipcMain.handle('spotify:connect', async () => {
   return new Promise((resolve, reject) => {
     // Open a dedicated auth window so Electron intercepts the bento:// redirect
     // directly via will-redirect / will-navigate — no OS protocol routing needed.
+    // parent: mainWindow keeps the auth window above main on Windows so it
+    // can't get hidden behind and orphaned.
     const authWin = new BrowserWindow({
       width: 480,
       height: 700,
       title: 'Connect Spotify',
+      parent: mainWindow ?? undefined,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -963,7 +976,7 @@ ipcMain.handle('spotify:connect', async () => {
       cleanup(new Error('Connect timed out — window closed?'))
     }, CONNECT_TIMEOUT_MS)
 
-    _pendingConnect = { resolve, reject, state, timeoutId }
+    _pendingConnect = { resolve, reject, state, timeoutId, cancel: cleanup }
 
     // Intercept the bento:// redirect before the webview tries to navigate to it.
     const interceptRedirect = (_event, url) => {
@@ -985,6 +998,13 @@ ipcMain.handle('spotify:connect', async () => {
     (result) => result,
     (err) => ({ ok: false, error: err.message })
   )
+})
+
+ipcMain.handle('spotify:connect-cancel', () => {
+  if (_pendingConnect?.cancel) {
+    _pendingConnect.cancel(new Error('Cancelled'))
+  }
+  return { ok: true }
 })
 
 ipcMain.handle('spotify:disconnect', () => {
@@ -1339,7 +1359,18 @@ ipcMain.handle('calendar:connect-icloud', async (_event, username, appPassword) 
 })
 
 ipcMain.handle('calendar:connect-google', async () => {
-  if (_pendingGCalConnect) return { ok: false, error: 'Connect already in progress' }
+  // Refuse to start with placeholder credentials — same wedge as Spotify
+  // (Google's invalid_client page doesn't redirect, so the orphan auth window
+  // strands the renderer's "WAITING FOR BROWSER…" state).
+  if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.startsWith('paste-')) {
+    return { ok: false, error: 'Google not configured — set credentials in electron/google-calendar-config.js' }
+  }
+  if (!GOOGLE_CLIENT_SECRET || GOOGLE_CLIENT_SECRET.startsWith('paste-')) {
+    return { ok: false, error: 'Google not configured — set credentials in electron/google-calendar-config.js' }
+  }
+
+  // Supersede any orphaned in-flight connect.
+  if (_pendingGCalConnect?.cancel) _pendingGCalConnect.cancel(new Error('Superseded'))
 
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL(GOOGLE_AUTH_URL)
@@ -1356,6 +1387,7 @@ ipcMain.handle('calendar:connect-google', async () => {
       width: 480,
       height: 700,
       title: 'Connect Google Calendar',
+      parent: mainWindow ?? undefined,
       webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
     })
 
@@ -1372,7 +1404,7 @@ ipcMain.handle('calendar:connect-google', async () => {
       5 * 60 * 1000
     )
 
-    _pendingGCalConnect = { resolve, reject, state, timeoutId }
+    _pendingGCalConnect = { resolve, reject, state, timeoutId, cancel: cleanup }
 
     const intercept = async (event, url) => {
       if (!url.startsWith(GOOGLE_REDIRECT_URI)) return
@@ -1435,6 +1467,13 @@ ipcMain.handle('calendar:connect-google', async () => {
 
     authWin.loadURL(authUrl.toString())
   })
+})
+
+ipcMain.handle('calendar:connect-google-cancel', () => {
+  if (_pendingGCalConnect?.cancel) {
+    _pendingGCalConnect.cancel(new Error('Cancelled'))
+  }
+  return { ok: true }
 })
 
 ipcMain.handle('calendar:get-calendars', async () => {

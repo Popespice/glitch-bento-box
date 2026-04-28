@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('bento', {
 
   // Spotify OAuth
   spotifyConnect: () => ipcRenderer.invoke('spotify:connect'),
+  spotifyConnectCancel: () => ipcRenderer.invoke('spotify:connect-cancel'),
   spotifyDisconnect: () => ipcRenderer.invoke('spotify:disconnect'),
 
   // GitHub OAuth (Device Flow)
@@ -36,6 +37,7 @@ contextBridge.exposeInMainWorld('bento', {
   calendarStatus: () => ipcRenderer.invoke('calendar:status'),
   calendarConnectIcloud: (u, p) => ipcRenderer.invoke('calendar:connect-icloud', u, p),
   calendarConnectGoogle: () => ipcRenderer.invoke('calendar:connect-google'),
+  calendarConnectGoogleCancel: () => ipcRenderer.invoke('calendar:connect-google-cancel'),
   calendarGetCalendars: () => ipcRenderer.invoke('calendar:get-calendars'),
   calendarSetActive: (ids) => ipcRenderer.invoke('calendar:set-active-calendars', ids),
   calendarDisconnect: () => ipcRenderer.invoke('calendar:disconnect'),

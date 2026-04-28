@@ -194,6 +194,13 @@ export default function SettingsOverlay({ onClose }) {
     }
   }
 
+  const handleSpotifyCancel = async () => {
+    await sys.spotifyConnectCancel?.()
+    // The pending connect's promise will resolve/reject from the cancel,
+    // which flips spotifyConnecting back to false in handleSpotifyConnect's
+    // finally block — no need to set state here.
+  }
+
   const handleSpotifyDisconnect = async () => {
     if (!window.confirm('Disconnect Spotify? Your refresh token will be wiped from local storage.'))
       return
@@ -247,6 +254,10 @@ export default function SettingsOverlay({ onClose }) {
     } finally {
       setCalConnecting(false)
     }
+  }
+
+  const handleCalendarGoogleCancel = async () => {
+    await sys.calendarConnectGoogleCancel?.()
   }
 
   const handleCalendarDisconnect = async () => {
@@ -496,19 +507,26 @@ export default function SettingsOverlay({ onClose }) {
                     DISCONNECT
                   </button>
                 </>
+              ) : calConnecting ? (
+                <>
+                  <span className="settings-status">WAITING FOR BROWSER…</span>
+                  <button
+                    className="settings-button settings-button--ghost"
+                    onClick={handleCalendarGoogleCancel}
+                  >
+                    CANCEL
+                  </button>
+                </>
               ) : (
                 <>
-                  {calConnecting && <span className="settings-status">WAITING FOR BROWSER…</span>}
-                  {!calConnecting && calError && (
+                  {calError ? (
                     <span className="settings-status settings-status--err">{calError}</span>
-                  )}
-                  {!calConnecting && !calError && (
+                  ) : (
                     <span className="settings-status">NOT CONNECTED</span>
                   )}
                   <button
                     className="settings-button"
                     onClick={handleCalendarConnectGoogle}
-                    disabled={calConnecting}
                   >
                     CONNECT GOOGLE
                   </button>
@@ -556,20 +574,24 @@ export default function SettingsOverlay({ onClose }) {
                   DISCONNECT
                 </button>
               </>
+            ) : spotifyConnecting ? (
+              <>
+                <span className="settings-status">WAITING FOR BROWSER…</span>
+                <button
+                  className="settings-button settings-button--ghost"
+                  onClick={handleSpotifyCancel}
+                >
+                  CANCEL
+                </button>
+              </>
             ) : (
               <>
-                {spotifyConnecting && <span className="settings-status">WAITING FOR BROWSER…</span>}
-                {!spotifyConnecting && spotifyError && (
+                {spotifyError ? (
                   <span className="settings-status settings-status--err">{spotifyError}</span>
-                )}
-                {!spotifyConnecting && !spotifyError && (
+                ) : (
                   <span className="settings-status">NOT CONNECTED</span>
                 )}
-                <button
-                  className="settings-button"
-                  onClick={handleSpotifyConnect}
-                  disabled={spotifyConnecting}
-                >
+                <button className="settings-button" onClick={handleSpotifyConnect}>
                   CONNECT SPOTIFY
                 </button>
               </>
