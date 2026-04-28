@@ -2,14 +2,9 @@ import { useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys, isReal } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
+import { fmtTimeRemaining } from '../lib/formatters.js'
 
 const SEGMENTS = 28
-
-function fmtTimeRemaining(minutes) {
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  return h > 0 ? `${h}H ${String(m).padStart(2, '0')}M` : `${m}M`
-}
 
 export default function BatteryTile() {
   const [level, setLevel] = useState(0)

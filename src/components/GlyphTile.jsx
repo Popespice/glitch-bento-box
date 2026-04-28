@@ -2,23 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
+import { fmtUptime, fmtCountdown } from '../lib/formatters.js'
 
 const DISK_SEGS = 20
-
-function fmtUptime(sec) {
-  const d = Math.floor(sec / 86400)
-  const h = Math.floor((sec % 86400) / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const hh = String(h).padStart(2, '0')
-  const mm = String(m).padStart(2, '0')
-  return d > 0 ? `${d}D ${hh}:${mm}` : `${hh}:${mm}`
-}
-
-function fmtTimer(sec) {
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
 
 export default function GlyphTile() {
   const [uptime, setUptime] = useState(null)
@@ -139,7 +125,7 @@ export default function GlyphTile() {
       <span className="tile-label glyph-section-label">FOCUS</span>
       <div className="glyph-row">
         <div className="tile-value-matrix sm">
-          <DotMatrix text={done ? 'DONE' : fmtTimer(remaining)} />
+          <DotMatrix text={done ? 'DONE' : fmtCountdown(remaining)} />
         </div>
       </div>
       <div className="glyph-timer-controls">

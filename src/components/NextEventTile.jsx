@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
+import { useSettingsChanged } from '../lib/useSettingsChanged.js'
 
 const FETCH_MS = 60 * 1000 // calendar data doesn't need to be real-time
 const TICK_MS = 1000 // local countdown cadence
@@ -32,15 +33,7 @@ export default function NextEventTile() {
 
   usePolling(fetchNow, FETCH_MS)
   usePolling(() => setNow(Date.now()), TICK_MS)
-
-  // Refetch immediately when settings change rather than waiting for the 60s poll.
-  useEffect(() => {
-    const onChanged = (e) => {
-      if (e.detail?.changed?.includes('calendar')) fetchNow()
-    }
-    window.addEventListener('bento:settings-changed', onChanged)
-    return () => window.removeEventListener('bento:settings-changed', onChanged)
-  }, [])
+  useSettingsChanged(['calendar'], fetchNow)
 
   // Branch by state — always render the tile chrome so layout doesn't jump.
   let nameText = ''

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { sys } from '../lib/sys.js'
+import { useSettingsChanged } from '../lib/useSettingsChanged.js'
 
 const WEEKS = 20
 const DAYS = 7
@@ -27,12 +28,12 @@ function generateFallback() {
 }
 
 function realToIntensity(days) {
-  const max = Math.max(1, ...days.map((d) => d.count))
+  const logMax = Math.log1p(Math.max(1, ...days.map((d) => d.count)))
   const cells = []
   for (let w = 0; w < WEEKS; w++) {
     for (let d = 0; d < DAYS; d++) {
       const count = days[w * DAYS + d]?.count ?? 0
-      cells.push(count / max)
+      cells.push(Math.log1p(count) / logMax)
     }
   }
   return cells
@@ -54,35 +55,28 @@ export default function HeatmapTile() {
   const [live, setLive] = useState(false)
   const [login, setLogin] = useState('')
 
+  const fetchHeatmap = () => {
+    sys
+      .githubStatus?.()
+      ?.then((s) => setLogin(s?.login || ''))
+      .catch(() => {})
+
+    sys
+      .githubHeatmap()
+      .then((days) => {
+        if (!days?.length) return
+        setCells(realToIntensity(days))
+        setActiveCount(days.filter((d) => d.count > 0).length)
+        setLive(true)
+      })
+      .catch(() => {})
+  }
+
   useEffect(() => {
-    let cancelled = false
-    const fetchHeatmap = () => {
-      // Fetch login label alongside heatmap data
-      sys.githubStatus?.()?.then((s) => {
-        if (!cancelled) setLogin(s?.login || '')
-      }).catch(() => {})
-
-      sys
-        .githubHeatmap()
-        .then((days) => {
-          if (cancelled || !days?.length) return
-          setCells(realToIntensity(days))
-          setActiveCount(days.filter((d) => d.count > 0).length)
-          setLive(true)
-        })
-        .catch(() => {})
-    }
     fetchHeatmap()
-
-    const onSettings = (e) => {
-      if (e.detail?.changed?.includes('github')) fetchHeatmap()
-    }
-    window.addEventListener('bento:settings-changed', onSettings)
-    return () => {
-      cancelled = true
-      window.removeEventListener('bento:settings-changed', onSettings)
-    }
   }, [])
+
+  useSettingsChanged(['github'], fetchHeatmap)
 
   const total = live ? activeCount : cells.reduce((s, c) => s + (c > 0.1 ? 1 : 0), 0)
   const label = login ? `@${login}` : 'GITHUB ACTIVITY'

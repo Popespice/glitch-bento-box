@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { sys } from '../lib/sys.js'
 
+const dispatchSettingsChanged = (changed) =>
+  window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed } }))
+
 export default function SettingsOverlay({ onClose }) {
   const [locationQuery, setLocationQuery] = useState('')
   const [locationName, setLocationName] = useState('')
@@ -127,9 +130,7 @@ export default function SettingsOverlay({ onClose }) {
       if (result?.ok) {
         setGithubPat('') // clear from input after saving
         await refreshGithubStatus()
-        window.dispatchEvent(
-          new CustomEvent('bento:settings-changed', { detail: { changed: ['github'] } })
-        )
+        dispatchSettingsChanged(['github'])
       } else {
         setGithubError(result?.error || 'Token validation failed')
       }
@@ -145,9 +146,7 @@ export default function SettingsOverlay({ onClose }) {
     await sys.githubDisconnect()
     await refreshGithubStatus()
     setGithubError('')
-    window.dispatchEvent(
-      new CustomEvent('bento:settings-changed', { detail: { changed: ['github'] } })
-    )
+    dispatchSettingsChanged(['github'])
   }
 
   const handleSpotifyConnect = async () => {
@@ -157,9 +156,7 @@ export default function SettingsOverlay({ onClose }) {
       const result = await sys.spotifyConnect()
       if (result?.ok) {
         await refreshSpotifyStatus()
-        window.dispatchEvent(
-          new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } })
-        )
+        dispatchSettingsChanged(['spotify'])
       } else {
         setSpotifyError(result?.error || 'Connect failed')
       }
@@ -176,9 +173,7 @@ export default function SettingsOverlay({ onClose }) {
     await sys.spotifyDisconnect()
     await refreshSpotifyStatus()
     setSpotifyError('')
-    window.dispatchEvent(
-      new CustomEvent('bento:settings-changed', { detail: { changed: ['spotify'] } })
-    )
+    dispatchSettingsChanged(['spotify'])
   }
 
   const handleCalendarConnectIcloud = async () => {
@@ -196,9 +191,7 @@ export default function SettingsOverlay({ onClose }) {
         setActiveCalIds((result.calendars || []).map((c) => c.id))
         setIcloudPass('') // clear password from the input field
         await refreshCalendarStatus()
-        window.dispatchEvent(
-          new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
-        )
+        dispatchSettingsChanged(['calendar'])
       } else {
         setCalError(result?.error || 'iCloud connect failed')
       }
@@ -218,9 +211,7 @@ export default function SettingsOverlay({ onClose }) {
         setCalCalendars(result.calendars || [])
         setActiveCalIds((result.calendars || []).map((c) => c.id))
         await refreshCalendarStatus()
-        window.dispatchEvent(
-          new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
-        )
+        dispatchSettingsChanged(['calendar'])
       } else {
         setCalError(result?.error || 'Google connect failed')
       }
@@ -241,9 +232,7 @@ export default function SettingsOverlay({ onClose }) {
     setIcloudPass('')
     setCalError('')
     await refreshCalendarStatus()
-    window.dispatchEvent(
-      new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
-    )
+    dispatchSettingsChanged(['calendar'])
   }
 
   const toggleCalendarId = (id) => {
@@ -254,9 +243,7 @@ export default function SettingsOverlay({ onClose }) {
     setCalSaving(true)
     try {
       await sys.calendarSetActive(activeCalIds)
-      window.dispatchEvent(
-        new CustomEvent('bento:settings-changed', { detail: { changed: ['calendar'] } })
-      )
+      dispatchSettingsChanged(['calendar'])
       setCalSaved(true)
       setTimeout(() => setCalSaved(false), 1200)
     } finally {
@@ -282,7 +269,7 @@ export default function SettingsOverlay({ onClose }) {
 
       // Tell the rest of the app to refetch immediately (the tiles' own
       // intervals are 30 min / 1 hr, which is too slow to feel responsive).
-      window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed } }))
+      dispatchSettingsChanged(changed)
 
       setSaved(true)
       setTimeout(() => {

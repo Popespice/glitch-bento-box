@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
+import { useSettingsChanged } from '../lib/useSettingsChanged.js'
+import { fmtProgress } from '../lib/formatters.js'
 
 const BARS = 36
 const PROGRESS_DOTS = 120
@@ -25,12 +27,6 @@ function DotProgressBar({ pct }) {
       ))}
     </div>
   )
-}
-
-function fmt(sec) {
-  const m = Math.floor(sec / 60)
-  const s = Math.floor(sec % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
 }
 
 export default function NowPlayingTile() {
@@ -69,15 +65,8 @@ export default function NowPlayingTile() {
   // Server poll — visibility-paused via usePolling.
   usePolling(fetchNow, FETCH_MS)
 
-  // Listen for settings changes (connect/disconnect) so we refetch immediately
-  // instead of waiting up to 5s for the next tick.
-  useEffect(() => {
-    const onChanged = (e) => {
-      if (e.detail?.changed?.includes('spotify')) fetchNow()
-    }
-    window.addEventListener('bento:settings-changed', onChanged)
-    return () => window.removeEventListener('bento:settings-changed', onChanged)
-  }, [])
+  // Refetch immediately on connect/disconnect rather than waiting for the 5s poll.
+  useSettingsChanged(['spotify'], fetchNow)
 
   // Local 1s interpolation — only ticks when actually playing. Each upstream
   // fetch snaps `position` back to the server value, so drift can't accumulate.
@@ -142,11 +131,11 @@ export default function NowPlayingTile() {
       {showProgress && (
         <div className="progress-row">
           <span className="progress-time">
-            <DotMatrix text={fmt(position)} />
+            <DotMatrix text={fmtProgress(position)} />
           </span>
           <DotProgressBar pct={pct} />
           <span className="progress-time">
-            <DotMatrix text={fmt(track.duration)} />
+            <DotMatrix text={fmtProgress(track.duration)} />
           </span>
         </div>
       )}

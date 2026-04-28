@@ -2,12 +2,7 @@ import { useRef, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
-
-function formatSpeed(bps) {
-  if (bps >= 1_000_000) return { value: (bps / 1_000_000).toFixed(1), unit: 'MB/S' }
-  if (bps >= 1_000) return { value: (bps / 1_000).toFixed(0), unit: 'KB/S' }
-  return { value: String(Math.round(bps)), unit: 'B/S' }
-}
+import { fmtSpeed } from '../lib/formatters.js'
 
 const BARS = 26
 const PEAK_WINDOW = 20 // samples ≈ 20 * 1s = 20s rolling peak
@@ -46,9 +41,9 @@ export default function NetworkTile() {
     }
   }, 3000)
 
-  const downFmt = formatSpeed(down)
-  const peakFmt = formatSpeed(peakDown)
-  const upFmt = formatSpeed(up)
+  const downFmt = fmtSpeed(down)
+  const peakFmt = fmtSpeed(peakDown)
+  const upFmt = fmtSpeed(up)
   const networkName = ssid || ip || iface
   const typeLabel =
     type === 'wifi' || type === 'wireless'
