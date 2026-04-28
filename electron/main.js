@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { exec, spawn } from 'node:child_process'
+import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -81,7 +81,7 @@ let _spotifyAccess = null // { token: string, expiresAt: number (ms epoch) }
 let _pendingConnect = null // { resolve, reject, state, timeoutId } during Spotify OAuth flow
 let _googleAccess = null // { token: string, expiresAt: number }
 let _pendingGCalConnect = null // { resolve, reject, state, timeoutId } during Google OAuth flow
-let _caffeinateProc = null // ChildProcess | null — caffeinate -d background process
+let _powerSaveId = null // number | null — Electron powerSaveBlocker ID while keep-awake is on
 let _btHelperPath = null // string | null — path to compiled Swift BT helper binary
 let _wifiAdapterName = null // string | null — cached Windows Wi-Fi interface name
 let _githubDeviceFlow = null // { deviceCode, timerId, abort } during active GitHub Device Flow
@@ -131,11 +131,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Ensure caffeinate is killed when the app exits so the Mac can sleep normally.
+// Release the keep-awake hold when the app exits so the system can sleep
+// normally. powerSaveBlocker.stop is a no-op if the ID is already released
+// or invalid, so this is safe to call unconditionally.
 app.on('before-quit', () => {
-  if (_caffeinateProc && !_caffeinateProc.killed) {
-    _caffeinateProc.kill()
-    _caffeinateProc = null
+  if (_powerSaveId != null) {
+    try { powerSaveBlocker.stop(_powerSaveId) } catch { /* ignore */ }
+    _powerSaveId = null
   }
 })
 
@@ -508,10 +510,18 @@ ipcMain.handle('sys:uptime', async () => {
   return { uptime: t.uptime } // seconds since boot — cheap, not cached
 })
 
-// Fire-and-forget: plays a macOS system sound. No-op on Windows.
+// Fire-and-forget: plays a system "ding" sound when the Pomodoro timer ends.
+// macOS plays one of the named system sounds (Glass, Hero, etc.); Windows
+// plays a built-in notification WAV via PowerShell's SoundPlayer.
 ipcMain.handle('sys:play-sound', (_event, sound = 'Glass') => {
   if (process.platform === 'darwin') {
     exec(`afplay "/System/Library/Sounds/${sound}.aiff"`)
+  } else if (process.platform === 'win32') {
+    // Windows ships several .wav files in C:\Windows\Media. Alarm04 is a
+    // bright two-tone chime that's a reasonable analogue to macOS Glass.
+    exec(
+      `powershell -NoProfile -Command "(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Alarm04.wav').PlaySync()"`,
+    )
   }
 })
 
@@ -1912,36 +1922,25 @@ ipcMain.handle('sys:bluetooth-toggle', async (_event, on) => {
   }
 })
 
-// ---------- Caffeinate ----------
+// ---------- Caffeinate (keep display awake) ----------
+// Uses Electron's built-in powerSaveBlocker, which wraps:
+//   macOS:   IOPMAssertionCreateWithName(kIOPMAssertionTypeNoDisplaySleep)
+//   Windows: SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_CONTINUOUS)
+//   Linux:   org.freedesktop.ScreenSaver.Inhibit
+// One cross-platform API, no shell calls, no stray-process cleanup.
 
-ipcMain.handle('sys:caffeinate-status', async () => {
-  // Check our own process first (fastest path).
-  if (_caffeinateProc && !_caffeinateProc.killed) return { on: true }
-  // Also catch stray caffeinate processes from before the app started.
-  try {
-    await execAsync('pgrep -x caffeinate', { timeout: 2000 })
-    return { on: true }
-  } catch {
-    return { on: false }
-  }
+ipcMain.handle('sys:caffeinate-status', () => {
+  return { on: _powerSaveId != null && powerSaveBlocker.isStarted(_powerSaveId) }
 })
 
-ipcMain.handle('sys:caffeinate-toggle', async (_event, on) => {
+ipcMain.handle('sys:caffeinate-toggle', (_event, on) => {
   if (on) {
-    if (_caffeinateProc && !_caffeinateProc.killed) return { ok: true }
-    _caffeinateProc = spawn('caffeinate', ['-d'], { detached: false })
-    _caffeinateProc.on('exit', () => {
-      _caffeinateProc = null
-    })
-  } else {
-    if (_caffeinateProc) {
-      _caffeinateProc.kill()
-      _caffeinateProc = null
+    if (_powerSaveId == null || !powerSaveBlocker.isStarted(_powerSaveId)) {
+      _powerSaveId = powerSaveBlocker.start('prevent-display-sleep')
     }
-    // Kill any stray system-level caffeinate processes too.
-    await execAsync('pgrep -x caffeinate | xargs kill 2>/dev/null || true', {
-      timeout: 2000,
-    }).catch(() => {})
+  } else if (_powerSaveId != null) {
+    try { powerSaveBlocker.stop(_powerSaveId) } catch { /* ignore */ }
+    _powerSaveId = null
   }
   return { ok: true }
 })
@@ -1949,6 +1948,10 @@ ipcMain.handle('sys:caffeinate-toggle', async (_event, on) => {
 // ---------- Focus ----------
 
 ipcMain.handle('sys:focus-set', async (_event, shortcutName) => {
+  // Focus modes are macOS-Shortcuts-specific; Windows Focus Assist has no
+  // documented CLI for programmatic control, so we no-op there. The renderer
+  // hides the Focus row entirely on Windows (see QuickSettingsTile).
+  if (process.platform !== 'darwin') return { ok: false, notSupported: true }
   // null shortcutName = deactivate (no standard shortcut for this, so just clear locally)
   if (!shortcutName) return { ok: true }
   try {
@@ -1960,5 +1963,6 @@ ipcMain.handle('sys:focus-set', async (_event, shortcutName) => {
 })
 
 ipcMain.handle('sys:open-shortcuts', async () => {
+  if (process.platform !== 'darwin') return
   await execAsync('open -a Shortcuts').catch(() => {})
 })

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
 import PixelToggle from './PixelToggle.jsx'
@@ -91,6 +91,13 @@ export default function QuickSettingsTile() {
 
   const [focusMode, setFocusMode] = useState(null) // key string | null
   const [focusError, setFocusError] = useState(false) // shortcuts not configured
+  const [platform, setPlatform] = useState(null) // 'darwin' | 'win32' | 'linux' | null
+
+  useEffect(() => {
+    sys.platform?.().then((p) => setPlatform(p?.platform || null))
+  }, [])
+
+  const focusSupported = platform === 'darwin' || platform === 'mock'
 
   // ── Status polling ──────────────────────────────────────────────────────
   const fetchStatus = async () => {
@@ -204,28 +211,30 @@ export default function QuickSettingsTile() {
           </div>
         </div>
 
-        {/* ── Focus ── */}
-        <div className="setting-row focus-row">
-          <span className="setting-name">FOCUS</span>
-          <div className="focus-modes-row">
-            {FOCUS_MODES.map((mode) => (
-              <button
-                key={mode.key}
-                className={`focus-mode-btn${focusMode === mode.key ? ' focus-mode-btn--active' : ''}`}
-                onClick={() => handleFocusMode(mode)}
-                title={mode.shortcut}
-              >
-                <FocusIcon pattern={mode.icon} active={focusMode === mode.key} />
-                <span className="focus-mode-label">
-                  <DotMatrix text={mode.label} />
-                </span>
-              </button>
-            ))}
+        {/* ── Focus ── (macOS only — Windows Focus Assist has no clean CLI) */}
+        {focusSupported && (
+          <div className="setting-row focus-row">
+            <span className="setting-name">FOCUS</span>
+            <div className="focus-modes-row">
+              {FOCUS_MODES.map((mode) => (
+                <button
+                  key={mode.key}
+                  className={`focus-mode-btn${focusMode === mode.key ? ' focus-mode-btn--active' : ''}`}
+                  onClick={() => handleFocusMode(mode)}
+                  title={mode.shortcut}
+                >
+                  <FocusIcon pattern={mode.icon} active={focusMode === mode.key} />
+                  <span className="focus-mode-label">
+                    <DotMatrix text={mode.label} />
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
-      {focusError && (
+      {focusSupported && focusError && (
         <button className="focus-setup-hint" onClick={openShortcutsApp}>
           SETUP SHORTCUTS ↗
         </button>
