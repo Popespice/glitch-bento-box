@@ -1163,6 +1163,27 @@ body,
   opacity: 0.75;
 }
 
+/* Tertiary action ("Change OAuth App") under the main connect/disconnect row.
+   Plain text styled like a footnote link — visually subordinate so it doesn't
+   compete with the primary action. */
+.settings-link-button {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--text-label);
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-top: 6px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-link-button:hover {
+  color: var(--text-secondary);
+}
+
 /* GitHub Device Flow user-code display: the XXXX-XXXX one-time code shown
    while waiting for browser authorization. Big and monospaced so the user
    can verify it matches what GitHub shows them. */

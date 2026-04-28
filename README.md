@@ -107,12 +107,16 @@ All service connections are made through the in-app **Settings** panel (⚙). No
 Open Settings → type a city name or zip code in the **Weather Location** field and press Enter or click away. The location is geocoded automatically (no API key needed).
 
 ### Spotify (Now Playing tile)
-Spotify requires a free developer app to authenticate:
+Bento doesn't ship with bundled Spotify credentials. Each user registers their own free developer app, which takes about 60 seconds. Bento uses PKCE, so you only need a Client ID (no Client Secret to manage).
 
-1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) → **Create App**
-2. Add `bento://callback` to **Redirect URIs**
-3. Copy **Client ID** and **Client Secret** into `electron/spotify-config.js`
-4. In Bento: **Settings → Spotify → Connect Spotify**
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) → **Create app**
+2. App name: anything (`Bento` is fine). Description: anything.
+3. Under **Redirect URIs**, add `bento://callback` exactly, then click **Add**
+4. Check the **Web API** box, agree to terms, click **Save**
+5. On the app's page, copy the **Client ID** from **Basic Information**
+6. In Bento: **Settings → SPOTIFY → paste your Client ID → SAVE**, then click **CONNECT SPOTIFY**
+
+> **Note:** Spotify's free developer apps cap at 25 unique authorized users. Above that you'd submit for "Quota Extension" review. Personal/small-circle use stays well under the cap.
 
 ### Calendar: iCloud (Next Event tile)
 No developer account needed.
@@ -131,17 +135,23 @@ Only needed if you prefer Google Calendar over iCloud.
 6. In Bento: **Settings → Calendar → Google → Connect Google**
 
 ### GitHub Heatmap
-The heatmap uses the GitHub GraphQL API. Two ways to authenticate:
+Bento uses GitHub's OAuth Device Flow, which means you sign in through your browser like any normal website (no token generation, no copy-pasting tokens). You do need to register your own OAuth App once, which takes about 60 seconds.
 
-**Option A: Personal Access Token (recommended)**
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)**
-2. Select the `read:user` scope
-3. In Bento: **Settings → GitHub** → paste the token and click **Save**
+1. Go to [github.com/settings/applications/new](https://github.com/settings/applications/new)
+2. Application name: anything (`Bento` is fine)
+3. Homepage URL: `https://github.com/Popespice/glitch-bento-box` (or anything)
+4. Authorization callback URL: `http://localhost` (required field but never used by the Device Flow)
+5. **Check the "Enable Device Flow" box** before saving — this is the important step
+6. Click **Register application**
+7. Copy the **Client ID** (you do **not** need to generate a client secret)
+8. In Bento: **Settings → GITHUB → paste your Client ID → SAVE**, then click **SIGN IN WITH GITHUB**
 
-**Option B: `gh` CLI (no config needed)**
-Install and authenticate the [GitHub CLI](https://cli.github.com) (`brew install gh && gh auth login`). Bento auto-detects the token and your login. No setup required.
+Your browser opens to `github.com/login/device` with the code pre-filled. Click Authorize and Bento picks up the rest automatically.
 
 > **Tip:** Only commits authored with an email registered to your GitHub account appear in the heatmap. If your contribution graph looks sparse, check your git email with `git config --global user.email`.
+
+**Alternative: `gh` CLI fallback**
+If you've already authenticated the [GitHub CLI](https://cli.github.com) (`gh auth login`), Bento can auto-detect that token and use it for the heatmap. No OAuth App registration needed in that case.
 
 ---
 

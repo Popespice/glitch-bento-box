@@ -26,5 +26,5 @@ yarn-error.log*
 .env.local
 .env.*.local
 electron/google-calendar-config.js
-# spotify-config.js and github-config.js are tracked — PKCE / Device Flow
-# client IDs are public identifiers and don't include secrets
+# OAuth client IDs are no longer bundled. Each user supplies their own via
+# the in-app Settings panel (stored in electron-store on their machine).

@@ -8,13 +8,24 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import si from 'systeminformation'
 import Store from 'electron-store'
-import { SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI } from './spotify-config.js'
 import {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI,
 } from './google-calendar-config.js'
-import { GITHUB_CLIENT_ID } from './github-config.js'
+
+// Redirect URIs are identical for every install (the user must add them to
+// their OAuth App's allowed list during registration). The OAuth client_ids
+// themselves are user-supplied at runtime via Settings (see store schema).
+const SPOTIFY_REDIRECT_URI = 'bento://callback'
+
+function getGithubClientId() {
+  return (store.get('github.clientId') || '').trim()
+}
+
+function getSpotifyClientId() {
+  return (store.get('spotify.clientId') || '').trim()
+}
 import { createDAVClient } from 'tsdav'
 import nodeIcal from 'node-ical'
 
@@ -47,19 +58,22 @@ const store = new Store({
       lon: null,
     },
     github: {
-      username: '',   // manual override / gh-CLI fallback
+      clientId: '',      // user-supplied OAuth App client_id (from github.com/settings/applications)
+      username: '',      // manual override / gh-CLI fallback
       accessToken: null, // GitHub OAuth access token (stored after Connect)
       login: '',         // username resolved via OAuth
     },
     pomodoro: {
       minutes: 25,
     },
-    // Privacy: this section holds exactly one field — the OAuth refresh token,
-    // and only after the user explicitly clicks Connect. It's nulled on Disconnect.
-    // No client ID/secret (those are bundled at build time, not user data),
-    // no access token (kept in main-process memory only), no display name,
-    // no email/profile/listening data of any kind.
+    // Privacy: this section holds exactly two fields — the user-supplied
+    // client_id (a public identifier they pasted from developer.spotify.com),
+    // and the OAuth refresh token (only after the user explicitly clicks
+    // Connect, nulled on Disconnect). No client_secret (PKCE eliminates the
+    // need for one), no access token (kept in main-process memory only),
+    // no display name, no email/profile/listening data of any kind.
     spotify: {
+      clientId: '',      // user-supplied OAuth App client_id (from developer.spotify.com)
       refreshToken: null,
     },
     // Privacy: stored locally only. iCloud uses an app-specific password (user
@@ -678,9 +692,17 @@ ipcMain.handle('sys:weather', async () => {
 
 ipcMain.handle('settings:get', () => ({
   weather: store.get('weather'),
-  github: store.get('github'),
-  // Privacy: only return a boolean, never the token itself.
-  spotify: { connected: !!store.get('spotify.refreshToken') },
+  // Privacy: never return the access token to the renderer. The Settings UI
+  // only needs the client_id (so it can show "Configured ✓" vs "Not configured")
+  // and the manual username override.
+  github: {
+    clientId: store.get('github.clientId') || '',
+    username: store.get('github.username') || '',
+  },
+  spotify: {
+    clientId: store.get('spotify.clientId') || '',
+    connected: !!store.get('spotify.refreshToken'),
+  },
 }))
 
 ipcMain.handle('settings:set', (_event, key, value) => {
@@ -833,9 +855,13 @@ function computeCodeChallenge(verifier) {
 
 // Token exchange (both authorization_code and refresh_token grants). PKCE
 // requires client_id in the body and forbids Basic auth, so callers pass
-// code_verifier (for code grant) or just refresh_token (for refresh).
+// code_verifier (for code grant) or just refresh_token (for refresh). The
+// client_id is read from the store at call time so the user's runtime-
+// configured value is always used (not a stale snapshot from app startup).
 async function exchangeSpotifyToken(params) {
-  const body = new URLSearchParams({ ...params, client_id: SPOTIFY_CLIENT_ID })
+  const clientId = getSpotifyClientId()
+  if (!clientId) throw new Error('Spotify OAuth not configured')
+  const body = new URLSearchParams({ ...params, client_id: clientId })
   const res = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -950,8 +976,12 @@ ipcMain.handle('spotify:connect', async () => {
   // Refuse to start if the client_id isn't set — opening the auth window with
   // a placeholder just shows a Spotify error page with no redirect, which
   // wedges the UI until the user finds and closes the orphaned window.
-  if (!SPOTIFY_CLIENT_ID || SPOTIFY_CLIENT_ID.startsWith('paste-')) {
-    return { ok: false, error: 'Spotify not configured — set SPOTIFY_CLIENT_ID in electron/spotify-config.js' }
+  const clientId = getSpotifyClientId()
+  if (!clientId) {
+    return {
+      ok: false,
+      error: 'Spotify OAuth not configured. Open Settings → Spotify → OAuth App to add your client ID.',
+    }
   }
 
   // Supersede any orphaned in-flight connect (e.g. from a previous attempt
@@ -963,7 +993,7 @@ ipcMain.handle('spotify:connect', async () => {
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL('https://accounts.spotify.com/authorize')
   authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('client_id', SPOTIFY_CLIENT_ID)
+  authUrl.searchParams.set('client_id', clientId)
   authUrl.searchParams.set('redirect_uri', SPOTIFY_REDIRECT_URI)
   authUrl.searchParams.set('scope', SPOTIFY_SCOPE)
   authUrl.searchParams.set('state', state)
@@ -1103,8 +1133,12 @@ ipcMain.handle('github:connect-start', async () => {
     _githubDeviceFlow = null
   }
 
-  if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID.startsWith('paste-')) {
-    return { ok: false, error: 'GitHub OAuth not configured — set GITHUB_CLIENT_ID in electron/github-config.js' }
+  const clientId = getGithubClientId()
+  if (!clientId) {
+    return {
+      ok: false,
+      error: 'GitHub OAuth not configured. Open Settings → GitHub → OAuth App to add your client ID.',
+    }
   }
 
   let codeData
@@ -1112,7 +1146,7 @@ ipcMain.handle('github:connect-start', async () => {
     const res = await fetch('https://github.com/login/device/code', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }),
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
     })
     if (!res.ok) return { ok: false, error: `GitHub responded ${res.status}` }
     codeData = await res.json()
@@ -1148,7 +1182,7 @@ ipcMain.handle('github:connect-start', async () => {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          client_id: GITHUB_CLIENT_ID,
+          client_id: clientId,
           device_code,
           grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
         }),

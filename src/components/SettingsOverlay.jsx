@@ -21,11 +21,17 @@ export default function SettingsOverlay({ onClose }) {
   const [githubAwaiting, setGithubAwaiting] = useState(false)
   const [githubUserCode, setGithubUserCode] = useState('')
   const [githubVerificationUri, setGithubVerificationUri] = useState('')
+  const [githubClientId, setGithubClientId] = useState('')
+  const [githubClientIdInput, setGithubClientIdInput] = useState('')
+  const [githubEditingCreds, setGithubEditingCreds] = useState(false)
 
-  // Spotify state — credentials are bundled, so this is just connect/disconnect.
+  // Spotify state — user-supplied client_id (PKCE), refresh token after Connect.
   const [spotifyConnected, setSpotifyConnected] = useState(false)
   const [spotifyConnecting, setSpotifyConnecting] = useState(false)
   const [spotifyError, setSpotifyError] = useState('')
+  const [spotifyClientId, setSpotifyClientId] = useState('')
+  const [spotifyClientIdInput, setSpotifyClientIdInput] = useState('')
+  const [spotifyEditingCreds, setSpotifyEditingCreds] = useState(false)
 
   // Calendar state — provider-aware (iCloud or Google), with calendar picker.
   const [calProvider, setCalProvider] = useState(null) // persisted provider
@@ -75,6 +81,8 @@ export default function SettingsOverlay({ onClose }) {
       if (s?.weather?.locationName) setLocationName(s.weather.locationName)
       if (s?.weather?.lat != null) setResolvedCoords({ lat: s.weather.lat, lon: s.weather.lon })
       if (s?.github?.username) setGithubUser(s.github.username)
+      setGithubClientId(s?.github?.clientId || '')
+      setSpotifyClientId(s?.spotify?.clientId || '')
       setSpotifyConnected(!!s?.spotify?.connected)
     })
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only init
@@ -139,6 +147,42 @@ export default function SettingsOverlay({ onClose }) {
   const handleLocationBlur = () => geocode(locationQuery)
   const handleLocationKey = (e) => {
     if (e.key === 'Enter') geocode(locationQuery)
+  }
+
+  const handleGithubSaveClientId = async () => {
+    const id = githubClientIdInput.trim()
+    if (!id) return
+    await sys.settingsSet('github.clientId', id)
+    setGithubClientId(id)
+    setGithubClientIdInput('')
+    setGithubEditingCreds(false)
+    setGithubError('')
+  }
+
+  const handleGithubClearClientId = async () => {
+    if (!window.confirm('Replace OAuth client ID? You will be signed out.')) return
+    await sys.githubDisconnect()
+    await sys.settingsSet('github.clientId', '')
+    setGithubClientId('')
+    await refreshGithubStatus()
+  }
+
+  const handleSpotifySaveClientId = async () => {
+    const id = spotifyClientIdInput.trim()
+    if (!id) return
+    await sys.settingsSet('spotify.clientId', id)
+    setSpotifyClientId(id)
+    setSpotifyClientIdInput('')
+    setSpotifyEditingCreds(false)
+    setSpotifyError('')
+  }
+
+  const handleSpotifyClearClientId = async () => {
+    if (!window.confirm('Replace OAuth client ID? You will be signed out.')) return
+    await sys.spotifyDisconnect()
+    await sys.settingsSet('spotify.clientId', '')
+    setSpotifyClientId('')
+    await refreshSpotifyStatus()
   }
 
   const handleGithubConnect = async () => {
@@ -357,17 +401,69 @@ export default function SettingsOverlay({ onClose }) {
         <div className="settings-section">
           <label className="settings-label">GITHUB</label>
           {githubConnected ? (
-            <div className="settings-spotify-row">
-              <span className="settings-status settings-status--ok">
-                ✓ {githubLogin || 'CONNECTED'}
-              </span>
+            <>
+              <div className="settings-spotify-row">
+                <span className="settings-status settings-status--ok">
+                  ✓ {githubLogin || 'CONNECTED'}
+                </span>
+                <button
+                  className="settings-button settings-button--ghost"
+                  onClick={handleGithubDisconnect}
+                >
+                  DISCONNECT
+                </button>
+              </div>
               <button
-                className="settings-button settings-button--ghost"
-                onClick={handleGithubDisconnect}
+                className="settings-link-button"
+                onClick={handleGithubClearClientId}
               >
-                DISCONNECT
+                Change OAuth App
               </button>
-            </div>
+            </>
+          ) : !githubClientId || githubEditingCreds ? (
+            <>
+              <input
+                className="settings-input"
+                type="text"
+                placeholder="Paste your GitHub OAuth Client ID"
+                value={githubClientIdInput}
+                onChange={(e) => setGithubClientIdInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleGithubSaveClientId()}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="settings-spotify-row">
+                <span className="settings-status">
+                  {githubClientId ? 'EDIT OAUTH APP' : 'NOT CONFIGURED'}
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {githubEditingCreds && (
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={() => {
+                        setGithubEditingCreds(false)
+                        setGithubClientIdInput('')
+                      }}
+                    >
+                      CANCEL
+                    </button>
+                  )}
+                  <button
+                    className="settings-button"
+                    onClick={handleGithubSaveClientId}
+                    disabled={!githubClientIdInput.trim()}
+                  >
+                    SAVE
+                  </button>
+                </div>
+              </div>
+              <span className="settings-hint">
+                Register a Device-Flow OAuth App at{' '}
+                <code>github.com/settings/applications/new</code>. Check{' '}
+                <strong>Enable Device Flow</strong>, then paste the Client ID. See the README for
+                full instructions.
+              </span>
+            </>
           ) : githubAwaiting ? (
             <>
               <div className="settings-github-code-row">
@@ -405,10 +501,12 @@ export default function SettingsOverlay({ onClose }) {
                   SIGN IN WITH GITHUB
                 </button>
               </div>
-              <span className="settings-hint">
-                Opens GitHub in your browser. Bento only requests the <code>read:user</code> scope and
-                stores the access token locally.
-              </span>
+              <button
+                className="settings-link-button"
+                onClick={handleGithubClearClientId}
+              >
+                Change OAuth App
+              </button>
             </>
           )}
         </div>
@@ -563,44 +661,93 @@ export default function SettingsOverlay({ onClose }) {
 
         <div className="settings-section">
           <label className="settings-label">SPOTIFY</label>
-          <div className="settings-spotify-row">
-            {spotifyConnected ? (
-              <>
-                <span className="settings-status settings-status--ok">✓ CONNECTED</span>
-                <button
-                  className="settings-button settings-button--ghost"
-                  onClick={handleSpotifyDisconnect}
-                >
-                  DISCONNECT
-                </button>
-              </>
-            ) : spotifyConnecting ? (
-              <>
-                <span className="settings-status">WAITING FOR BROWSER…</span>
-                <button
-                  className="settings-button settings-button--ghost"
-                  onClick={handleSpotifyCancel}
-                >
-                  CANCEL
-                </button>
-              </>
-            ) : (
-              <>
-                {spotifyError ? (
-                  <span className="settings-status settings-status--err">{spotifyError}</span>
+          {!spotifyClientId || spotifyEditingCreds ? (
+            <>
+              <input
+                className="settings-input"
+                type="text"
+                placeholder="Paste your Spotify OAuth Client ID"
+                value={spotifyClientIdInput}
+                onChange={(e) => setSpotifyClientIdInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSpotifySaveClientId()}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="settings-spotify-row">
+                <span className="settings-status">
+                  {spotifyClientId ? 'EDIT OAUTH APP' : 'NOT CONFIGURED'}
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {spotifyEditingCreds && (
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={() => {
+                        setSpotifyEditingCreds(false)
+                        setSpotifyClientIdInput('')
+                      }}
+                    >
+                      CANCEL
+                    </button>
+                  )}
+                  <button
+                    className="settings-button"
+                    onClick={handleSpotifySaveClientId}
+                    disabled={!spotifyClientIdInput.trim()}
+                  >
+                    SAVE
+                  </button>
+                </div>
+              </div>
+              <span className="settings-hint">
+                Register a PKCE app at <code>developer.spotify.com/dashboard</code> with{' '}
+                <code>bento://callback</code> as a Redirect URI, then paste the Client ID. See the
+                README for full instructions.
+              </span>
+            </>
+          ) : (
+            <>
+              <div className="settings-spotify-row">
+                {spotifyConnected ? (
+                  <>
+                    <span className="settings-status settings-status--ok">✓ CONNECTED</span>
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={handleSpotifyDisconnect}
+                    >
+                      DISCONNECT
+                    </button>
+                  </>
+                ) : spotifyConnecting ? (
+                  <>
+                    <span className="settings-status">WAITING FOR BROWSER…</span>
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={handleSpotifyCancel}
+                    >
+                      CANCEL
+                    </button>
+                  </>
                 ) : (
-                  <span className="settings-status">NOT CONNECTED</span>
+                  <>
+                    {spotifyError ? (
+                      <span className="settings-status settings-status--err">{spotifyError}</span>
+                    ) : (
+                      <span className="settings-status">NOT CONNECTED</span>
+                    )}
+                    <button className="settings-button" onClick={handleSpotifyConnect}>
+                      CONNECT SPOTIFY
+                    </button>
+                  </>
                 )}
-                <button className="settings-button" onClick={handleSpotifyConnect}>
-                  CONNECT SPOTIFY
-                </button>
-              </>
-            )}
-          </div>
-          <span className="settings-hint">
-            Sign in once. Only your refresh token is stored locally — disconnect any time to wipe
-            it.
-          </span>
+              </div>
+              <button
+                className="settings-link-button"
+                onClick={handleSpotifyClearClientId}
+              >
+                Change OAuth App
+              </button>
+            </>
+          )}
         </div>
 
         <div className="settings-footer">
