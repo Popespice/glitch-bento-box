@@ -4,6 +4,20 @@ A pixel-art developer dashboard for macOS. Live system stats, Spotify now-playin
 
 ---
 
+## **READ THIS FIRST: GitHub and Spotify require your own OAuth Apps**
+
+> **Bento does not ship with credentials for GitHub or Spotify. To use the GitHub heatmap tile or the Spotify Now Playing tile, YOU MUST register your own free OAuth Apps with each service and paste your own Client ID into the in-app Settings panel. This takes about 60 seconds per service and only needs to happen once.**
+>
+> **Why?** Personal/private use only. The author of Bento does not administer your authentications, does not see your data, and does not want users authorizing apps that the author owns. Each user is the operator of their own GitHub/Spotify integration.
+>
+> **What works without setup:** Clock, Uptime, Disk, Focus timer, Weather, Battery / Power Draw, System Pulse (GPU), Network, CPU, Memory, Wi-Fi toggle, Bluetooth toggle, Caffeinate.
+>
+> **What requires the OAuth setup below:** GitHub Activity heatmap, Spotify Now Playing, Google Calendar Next Event (iCloud Calendar uses a different mechanism and does not need OAuth registration).
+>
+> Full step-by-step instructions are in [First-time setup](#first-time-setup) below. **Skip those steps and the GitHub/Spotify tiles WILL NOT WORK** — that is a guarantee, not a bug.
+
+---
+
 ## Using Bento
 
 ### Window
@@ -107,7 +121,10 @@ All service connections are made through the in-app **Settings** panel (⚙). No
 Open Settings → type a city name or zip code in the **Weather Location** field and press Enter or click away. The location is geocoded automatically (no API key needed).
 
 ### Spotify (Now Playing tile)
-Bento doesn't ship with bundled Spotify credentials. Each user registers their own free developer app, which takes about 60 seconds. Bento uses PKCE, so you only need a Client ID (no Client Secret to manage).
+
+> **REQUIRED:** the Now Playing tile will display "SPOTIFY OFFLINE" until you complete this section. Bento does not ship with Spotify credentials. **You must register your own OAuth App.** No exceptions, no workarounds.
+
+Bento uses PKCE, so you only need a Client ID (no Client Secret to manage). The whole thing takes about 60 seconds.
 
 1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) → **Create app**
 2. App name: anything (`Bento` is fine). Description: anything.
@@ -135,7 +152,10 @@ Only needed if you prefer Google Calendar over iCloud.
 6. In Bento: **Settings → Calendar → Google → Connect Google**
 
 ### GitHub Heatmap
-Bento uses GitHub's OAuth Device Flow, which means you sign in through your browser like any normal website (no token generation, no copy-pasting tokens). You do need to register your own OAuth App once, which takes about 60 seconds.
+
+> **REQUIRED:** the GitHub Activity tile will be empty until you complete this section. Bento does not ship with GitHub credentials. **You must register your own OAuth App.** No exceptions, no workarounds.
+
+Bento uses GitHub's OAuth Device Flow, which means you sign in through your browser like any normal website (no token generation, no copy-pasting tokens). The whole thing takes about 60 seconds.
 
 1. Go to [github.com/settings/applications/new](https://github.com/settings/applications/new)
 2. Application name: anything (`Bento` is fine)
