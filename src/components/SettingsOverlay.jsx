@@ -79,7 +79,12 @@ export default function SettingsOverlay({ onClose }) {
     sys.settingsGet().then((s) => {
       if (s?.weather?.query) setLocationQuery(s.weather.query)
       if (s?.weather?.locationName) setLocationName(s.weather.locationName)
-      if (s?.weather?.lat != null) setResolvedCoords({ lat: s.weather.lat, lon: s.weather.lon })
+      if (s?.weather?.lat != null)
+        setResolvedCoords({
+          lat: s.weather.lat,
+          lon: s.weather.lon,
+          timezone: s.weather.timezone || '',
+        })
       if (s?.github?.username) setGithubUser(s.github.username)
       setGithubClientId(s?.github?.clientId || '')
       setSpotifyClientId(s?.spotify?.clientId || '')
@@ -133,7 +138,7 @@ export default function SettingsOverlay({ onClose }) {
       const result = await sys.settingsGeocode(query.trim())
       if (result) {
         setLocationName(result.locationName)
-        setResolvedCoords({ lat: result.lat, lon: result.lon })
+        setResolvedCoords({ lat: result.lat, lon: result.lon, timezone: result.timezone || '' })
       } else {
         setLocationError('Location not found — try a city name or zip code')
       }
@@ -343,6 +348,7 @@ export default function SettingsOverlay({ onClose }) {
           locationName: locationName,
           lat: resolvedCoords.lat,
           lon: resolvedCoords.lon,
+          timezone: resolvedCoords.timezone || '',
         })
         changed.push('weather')
       }

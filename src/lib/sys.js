@@ -58,7 +58,7 @@ const mocks = {
     calendarName: 'WORK',
   }),
   settingsGet: async () => ({
-    weather: { query: '', locationName: '', lat: null, lon: null },
+    weather: { query: '', locationName: '', lat: null, lon: null, timezone: '' },
     github: { username: '' },
     pomodoro: { minutes: 25 },
     spotify: { connected: false },
@@ -68,6 +68,7 @@ const mocks = {
     lat: 40.7128,
     lon: -74.006,
     locationName: `${query} (mock)`,
+    timezone: 'America/New_York',
   }),
   windowClose: () => {},
   windowMinimize: () => {},
