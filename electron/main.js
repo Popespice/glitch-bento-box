@@ -90,6 +90,10 @@ const store = new Store({
       googleEmail: '',
       activeCalendarIds: [], // calendar URLs the user opted into
     },
+    ui: {
+      // 1.0 = floor (current sizes); valid presets: 1.0 / 1.15 / 1.3 / 1.5
+      textScale: 1.0,
+    },
   },
 })
 
@@ -706,6 +710,7 @@ ipcMain.handle('settings:get', () => ({
     clientId: store.get('spotify.clientId') || '',
     connected: !!store.get('spotify.refreshToken'),
   },
+  ui: store.get('ui'),
 }))
 
 ipcMain.handle('settings:set', (_event, key, value) => {

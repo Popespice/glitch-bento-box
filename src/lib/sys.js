@@ -62,6 +62,7 @@ const mocks = {
     github: { username: '' },
     pomodoro: { minutes: 25 },
     spotify: { connected: false },
+    ui: { textScale: 1 },
   }),
   settingsSet: async () => true,
   settingsGeocode: async (query) => ({

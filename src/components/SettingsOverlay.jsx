@@ -4,6 +4,13 @@ import { sys } from '../lib/sys.js'
 const dispatchSettingsChanged = (changed) =>
   window.dispatchEvent(new CustomEvent('bento:settings-changed', { detail: { changed } }))
 
+const TEXT_SIZE_PRESETS = [
+  { label: 'S', value: 1.0 },
+  { label: 'M', value: 1.15 },
+  { label: 'L', value: 1.3 },
+  { label: 'XL', value: 1.5 },
+]
+
 export default function SettingsOverlay({ onClose }) {
   const [locationQuery, setLocationQuery] = useState('')
   const [locationName, setLocationName] = useState('')
@@ -13,6 +20,7 @@ export default function SettingsOverlay({ onClose }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
+  const [textScale, setTextScale] = useState(1)
 
   // GitHub OAuth state (Device Flow)
   const [githubConnected, setGithubConnected] = useState(false)
@@ -89,6 +97,7 @@ export default function SettingsOverlay({ onClose }) {
       setGithubClientId(s?.github?.clientId || '')
       setSpotifyClientId(s?.spotify?.clientId || '')
       setSpotifyConnected(!!s?.spotify?.connected)
+      setTextScale(s?.ui?.textScale ?? 1)
     })
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only init
     refreshGithubStatus()
@@ -338,6 +347,12 @@ export default function SettingsOverlay({ onClose }) {
     }
   }
 
+  const handleTextSizeSelect = async (value) => {
+    setTextScale(value)
+    await sys.settingsSet('ui', { textScale: value })
+    dispatchSettingsChanged(['ui'])
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
@@ -377,6 +392,26 @@ export default function SettingsOverlay({ onClose }) {
           <button className="settings-close" onClick={onClose} aria-label="Close">
             ✕
           </button>
+        </div>
+
+        <div className="settings-body">
+        <div className="settings-section">
+          <label className="settings-label">TEXT SIZE</label>
+          <div className="settings-calendar-tabs">
+            {TEXT_SIZE_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                className={`settings-tab${textScale === preset.value ? ' settings-tab--active' : ''}`}
+                onClick={() => handleTextSizeSelect(preset.value)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <span className="settings-hint">
+            Scales every small label. Big readouts (clock, temp, %) stay the same.
+          </span>
         </div>
 
         <div className="settings-section">
@@ -754,6 +789,7 @@ export default function SettingsOverlay({ onClose }) {
               </button>
             </>
           )}
+        </div>
         </div>
 
         <div className="settings-footer">
