@@ -41,11 +41,17 @@ On **Windows**, the standard title bar controls appear at the top.
 
 ### Settings
 
-Click the **gear** button (bottom-left corner) to open the settings panel. Press **Escape** or click outside the panel to close it. Settings are saved immediately, and connected tiles refresh as soon as you save.
+Click the **gear** button (bottom-right corner, next to the theme toggle) to open the settings panel. Press **Escape** or click outside the panel to close it. Settings are saved immediately, and connected tiles refresh as soon as you save.
+
+If your text size is large enough that the panel reaches the bottom of the screen, the panel body scrolls — the title and **SAVE** button stay pinned so they're always reachable.
 
 ### Theme
 
 The **LIGHT / DARK** button (bottom-right corner) switches between light and dark mode. Your choice is remembered between sessions.
+
+### Text size
+
+Open Settings and pick a preset under **TEXT SIZE**: **S** (the default — current sizes), **M**, **L**, or **XL**. The preset scales every small label (tile labels, meta lines, settings text) up from S; the big DotMatrix readouts (clock time, temperature, CPU%) intentionally stay the same size at every preset. Your choice persists between sessions.
 
 ---
 
