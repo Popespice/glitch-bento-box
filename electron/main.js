@@ -44,6 +44,9 @@ const store = new Store({
       locationName: '',
       lat: null,
       lon: null,
+      // IANA timezone (e.g. "America/New_York"). Resolved by the geocoder
+      // alongside lat/lon and used by the clock tile.
+      timezone: '',
     },
     github: {
       username: '',   // manual override / gh-CLI fallback
@@ -536,6 +539,7 @@ ipcMain.handle('settings:geocode', async (_event, query) => {
       lat: r.latitude,
       lon: r.longitude,
       locationName: parts.join(', '),
+      timezone: r.timezone || '',
     }
   } catch (err) {
     console.error('[geocode]', err.message)
