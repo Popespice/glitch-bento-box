@@ -77,6 +77,9 @@ body,
    DASHBOARD LAYOUT
    ============================================================ */
 .dashboard {
+  /* Multiplied into every non-DotMatrix font-size; overridden by inline
+     style from App.jsx to honor the user's TEXT SIZE preset. */
+  --text-scale: 1;
   position: relative;
   display: grid;
   grid-template-columns: 5fr 7fr;
@@ -130,7 +133,7 @@ body,
 
 .tile-label {
   font-family: 'Space Mono', monospace;
-  font-size: 9px;
+  font-size: calc(9px * var(--text-scale));
   font-weight: 400;
   letter-spacing: 0.18em;
   color: var(--text-label);
@@ -177,14 +180,14 @@ body,
 
 .clock-day {
   font-family: 'Space Mono', monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   color: var(--text-primary);
   transition: color 0.35s ease;
 }
 
 .clock-date {
   font-family: 'Space Mono', monospace;
-  font-size: 9px;
+  font-size: calc(9px * var(--text-scale));
   letter-spacing: 0.14em;
   color: var(--text-secondary);
   transition: color 0.35s ease;
@@ -220,7 +223,7 @@ body,
 
 .glyph-placeholder-text {
   font-family: 'Space Mono', monospace;
-  font-size: 8px;
+  font-size: calc(8px * var(--text-scale));
   letter-spacing: 0.22em;
   color: var(--text-label);
   text-align: center;
@@ -272,7 +275,7 @@ body,
 
 .tile-value-unit {
   font-family: 'Space Mono', monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   color: var(--text-secondary);
   margin-left: 0;
   padding-bottom: 2px;
@@ -288,7 +291,7 @@ body,
 
 .tile-meta-line {
   font-family: 'Space Mono', monospace;
-  font-size: 8px;
+  font-size: calc(8px * var(--text-scale));
   letter-spacing: 0.12em;
   color: var(--text-secondary);
   transition: color 0.35s ease;
@@ -296,7 +299,7 @@ body,
 
 .tile-meta-name {
   font-family: 'Space Mono', monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   color: var(--text-primary);
   margin-bottom: 2px;
   transition: color 0.35s ease;
@@ -358,7 +361,7 @@ body,
 
 .pulse-unit {
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   color: var(--text-secondary);
   letter-spacing: 0.1em;
   padding-bottom: 3px;
@@ -392,7 +395,7 @@ body,
 
 .freq-unit {
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   color: var(--text-secondary);
   letter-spacing: 0.1em;
   padding-bottom: 3px;
@@ -447,7 +450,7 @@ body,
 
 .cpu-meta {
   font-family: 'Space Mono', monospace;
-  font-size: 8px;
+  font-size: calc(8px * var(--text-scale));
   letter-spacing: 0.12em;
   color: var(--text-secondary);
   margin-top: 6px;
@@ -464,7 +467,7 @@ body,
 
 .memory-sub {
   font-family: 'Space Mono', monospace;
-  font-size: 8.5px;
+  font-size: calc(8.5px * var(--text-scale));
   letter-spacing: 0.1em;
   color: var(--text-secondary);
   margin-bottom: 8px;
@@ -490,7 +493,7 @@ body,
 
 .mem-swap {
   font-family: 'Space Mono', monospace;
-  font-size: 8px;
+  font-size: calc(8px * var(--text-scale));
   letter-spacing: 0.1em;
   color: var(--text-secondary);
   margin-top: auto;
@@ -539,7 +542,7 @@ body,
 
 .playing-artist {
   font-family: 'Space Mono', monospace;
-  font-size: 8.5px;
+  font-size: calc(8.5px * var(--text-scale));
   letter-spacing: 0.14em;
   color: var(--text-secondary);
   transition: color 0.35s ease;
@@ -628,7 +631,8 @@ body,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 0;
+  gap: 10px;
+  padding: 2px 0;
   border-bottom: 1px solid var(--separator);
   transition: border-color 0.35s ease;
 }
@@ -639,24 +643,33 @@ body,
 
 .setting-name {
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   color: var(--text-primary);
   letter-spacing: 0.05em;
   transition: color 0.35s ease;
+  flex-shrink: 0;
 }
 
 .setting-value {
   font-family: 'Space Mono', monospace;
-  font-size: 8px;
+  font-size: calc(8px * var(--text-scale));
   color: var(--text-secondary);
   letter-spacing: 0.1em;
   transition: color 0.35s ease;
+  /* Truncate long SSIDs so the toggle stays visible at large text scales. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .setting-right {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
 }
 
 .toggle-switch {
@@ -695,7 +708,7 @@ body,
 /* Focus mode icon buttons */
 .focus-row {
   align-items: flex-start;
-  padding-top: 5px;
+  padding-top: 3px;
 }
 
 .focus-modes-row {
@@ -731,7 +744,7 @@ body,
 
 .focus-setup-hint {
   font-family: 'Space Mono', monospace;
-  font-size: 7px;
+  font-size: calc(7px * var(--text-scale));
   letter-spacing: 0.12em;
   color: var(--text-secondary);
   background: transparent;
@@ -794,7 +807,7 @@ body,
 
 .countdown-unit {
   font-family: 'Space Mono', monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   color: var(--text-secondary);
   letter-spacing: 0.08em;
   padding-bottom: 2px;
@@ -803,7 +816,7 @@ body,
 
 .event-name {
   font-family: 'Space Mono', monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 4px;
@@ -813,7 +826,7 @@ body,
 
 .event-detail {
   font-family: 'Space Mono', monospace;
-  font-size: 7.5px;
+  font-size: calc(7.5px * var(--text-scale));
   letter-spacing: 0.1em;
   color: var(--text-secondary);
   line-height: 1.5;
@@ -825,11 +838,8 @@ body,
    THEME TOGGLE BUTTON
    ============================================================ */
 .theme-toggle {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
   font-family: 'Space Mono', monospace;
-  font-size: 9px;
+  font-size: calc(9px * var(--text-scale));
   letter-spacing: 0.2em;
   padding: 8px 14px;
   background: var(--tile-bg);
@@ -840,7 +850,6 @@ body,
     background-color 0.25s ease,
     color 0.25s ease,
     border-color 0.25s ease;
-  z-index: 100;
 }
 
 .theme-toggle:hover {
@@ -889,7 +898,7 @@ body,
    LAST CMD TILE
    ============================================================ */
 .last-cmd-full {
-  font-size: 8px;
+  font-size: calc(8px * var(--text-scale));
   letter-spacing: 0.04em;
   color: var(--text-secondary);
   word-break: break-all;
@@ -926,7 +935,7 @@ body,
 
 .glyph-btn {
   font-family: 'Space Mono', monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   background: var(--bar-bg);
   color: var(--text-primary);
   border: 1px solid var(--separator);
@@ -943,26 +952,34 @@ body,
 }
 
 .glyph-btn--sm {
-  font-size: 9px;
+  font-size: calc(9px * var(--text-scale));
   padding: 3px 6px;
   color: var(--text-secondary);
 }
 
 .glyph-timer-label {
   font-family: 'Space Mono', monospace;
-  font-size: 9px;
+  font-size: calc(9px * var(--text-scale));
   letter-spacing: 0.1em;
   color: var(--text-secondary);
 }
 
 /* ============================================================
-   SETTINGS BUTTON — bare gear icon, sits left of theme toggle
+   BOTTOM-RIGHT CONTROLS — gear + theme toggle, kept side-by-side so
+   they can't collide as text scales up.
    ============================================================ */
-.settings-btn {
+.dashboard-controls {
   position: fixed;
   bottom: 16px;
-  right: 90px;
-  font-size: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 100;
+}
+
+.settings-btn {
+  font-size: calc(16px * var(--text-scale));
   line-height: 1;
   padding: 6px 8px;
   background: none;
@@ -970,7 +987,6 @@ body,
   color: var(--text-secondary);
   cursor: pointer;
   transition: color 0.25s ease;
-  z-index: 100;
 }
 
 .settings-btn:hover {
@@ -1002,9 +1018,24 @@ body,
   min-width: 380px;
   max-width: 460px;
   width: 100%;
+  /* Cap so the panel never exceeds the viewport. The body scrolls; the
+     header (title) and footer (SAVE) stay pinned and always reachable. */
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
   gap: 28px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Visual breathing room so the scrollbar doesn't kiss the section text. */
+  padding-right: 6px;
+  margin-right: -6px;
 }
 
 .settings-header {
@@ -1015,14 +1046,14 @@ body,
 
 .settings-title {
   font-family: 'Space Mono', monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   letter-spacing: 0.12em;
   color: var(--text-primary);
 }
 
 .settings-close {
   font-family: 'Space Mono', monospace;
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -1044,14 +1075,14 @@ body,
 
 .settings-label {
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   letter-spacing: 0.14em;
   color: var(--text-secondary);
 }
 
 .settings-input {
   font-family: 'Space Mono', monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   background: var(--bar-bg);
   color: var(--text-primary);
   border: 1px solid var(--separator);
@@ -1071,7 +1102,7 @@ body,
 
 .settings-status {
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   letter-spacing: 0.06em;
   color: var(--text-secondary);
 }
@@ -1086,7 +1117,7 @@ body,
 
 .settings-hint {
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   letter-spacing: 0.06em;
   color: var(--text-label);
 }
@@ -1098,7 +1129,7 @@ body,
 
 .settings-save {
   font-family: 'Space Mono', monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   letter-spacing: 0.1em;
   padding: 9px 22px;
   background: var(--text-primary);
@@ -1131,7 +1162,7 @@ body,
 
 .settings-button {
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   letter-spacing: 0.1em;
   padding: 7px 14px;
   background: var(--text-primary);
@@ -1159,7 +1190,7 @@ body,
 
 .settings-label--sub {
   margin-top: 14px;
-  font-size: 9px;
+  font-size: calc(9px * var(--text-scale));
   opacity: 0.75;
 }
 
@@ -1172,7 +1203,7 @@ body,
 .settings-tab {
   flex: 1;
   font-family: 'Space Mono', monospace;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale));
   letter-spacing: 0.1em;
   padding: 7px 12px;
   background: transparent;
@@ -1217,7 +1248,7 @@ body,
   align-items: center;
   gap: 8px;
   font-family: 'Space Mono', monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   color: var(--text-primary);
   cursor: pointer;
   user-select: none;
