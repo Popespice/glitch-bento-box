@@ -53,9 +53,10 @@ jobs:
 
       # OAuth client IDs are user-supplied at runtime; CI just needs the files
       # to satisfy the static imports in electron/main.js.
+      # Only google-calendar-config is imported statically by main.js; spotify
+      # and github use PKCE / Device Flow with user-supplied client IDs at
+      # runtime (no bundled secrets), so no stub needed for those.
       - run: cp electron/google-calendar-config.example.js electron/google-calendar-config.js
-      - run: cp electron/spotify-config.example.js electron/spotify-config.js
-      - run: cp electron/github-config.example.js electron/github-config.js
 
       - run: npm run dist:mac
 
@@ -86,9 +87,10 @@ jobs:
 
       - run: npm ci
 
+      # Only google-calendar-config is imported statically by main.js; spotify
+      # and github use PKCE / Device Flow with user-supplied client IDs at
+      # runtime (no bundled secrets), so no stub needed for those.
       - run: cp electron/google-calendar-config.example.js electron/google-calendar-config.js
-      - run: cp electron/spotify-config.example.js electron/spotify-config.js
-      - run: cp electron/github-config.example.js electron/github-config.js
 
       - run: npm run dist:win
 

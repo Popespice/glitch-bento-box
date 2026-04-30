@@ -28,3 +28,8 @@ yarn-error.log*
 electron/google-calendar-config.js
 # OAuth client IDs are no longer bundled. Each user supplies their own via
 # the in-app Settings panel (stored in electron-store on their machine).
+# These two files are stale leftovers from the pre-PKCE design — never
+# imported by current main.js — but they may still hold real secrets, so
+# explicitly ignore them to prevent accidental commits.
+electron/spotify-config.js
+electron/github-config.js
