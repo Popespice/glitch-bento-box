@@ -90,18 +90,32 @@ export default function SettingsOverlay({ onClose }) {
     }
   }
 
-  // Load existing settings on mount
+  // Load existing settings on mount. If the IPC roundtrip resolves AFTER the
+  // user has already started typing (slow disk, busy main thread), we'd
+  // otherwise overwrite their input with the stored value. Drop the result
+  // entirely if the panel has been closed or an interaction flag is set.
+  const cancelledRef = useRef(false)
   useEffect(() => {
+    cancelledRef.current = false
     sys.settingsGet().then((s) => {
-      if (s?.weather?.query) setLocationQuery(s.weather.query)
-      if (s?.weather?.locationName) setLocationName(s.weather.locationName)
-      if (s?.weather?.lat != null)
-        setResolvedCoords({
-          lat: s.weather.lat,
-          lon: s.weather.lon,
-          timezone: s.weather.timezone || '',
-        })
-      if (s?.github?.username) setGithubUser(s.github.username)
+      if (cancelledRef.current) return
+      // For text inputs, only seed if the user hasn't typed yet (still empty).
+      // The radio-style fields (textScale, screenSize) and read-only flags
+      // (clientId, connected) are safe to set unconditionally.
+      setLocationQuery((cur) => (cur ? cur : s?.weather?.query || ''))
+      setLocationName((cur) => (cur ? cur : s?.weather?.locationName || ''))
+      if (s?.weather?.lat != null) {
+        setResolvedCoords((cur) =>
+          cur
+            ? cur
+            : {
+                lat: s.weather.lat,
+                lon: s.weather.lon,
+                timezone: s.weather.timezone || '',
+              }
+        )
+      }
+      setGithubUser((cur) => (cur ? cur : s?.github?.username || ''))
       setGithubClientId(s?.github?.clientId || '')
       setSpotifyClientId(s?.spotify?.clientId || '')
       setSpotifyConnected(!!s?.spotify?.connected)
@@ -111,6 +125,9 @@ export default function SettingsOverlay({ onClose }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only init
     refreshGithubStatus()
     refreshCalendarStatus()
+    return () => {
+      cancelledRef.current = true
+    }
   }, [])
 
   // Listen for GitHub Device Flow completion (sent from main process when
@@ -132,14 +149,42 @@ export default function SettingsOverlay({ onClose }) {
     return unsubscribe
   }, [])
 
-  // Escape key to close
+  // Escape key to close + Tab focus trap. Without trapping, Tab moves focus
+  // into the dashboard tiles behind the modal — confusing for keyboard users
+  // and an accessibility violation.
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const panel = overlayRef.current
+      if (!panel) return
+      const focusables = panel.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      if (!focusables.length) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // Autofocus the close button on open so keyboard users land somewhere
+  // sensible (instead of staying on the gear button behind the modal).
+  const closeBtnRef = useRef(null)
+  useEffect(() => {
+    closeBtnRef.current?.focus()
+  }, [])
 
   // Click outside to close
   const handleBackdropClick = (e) => {
@@ -406,7 +451,12 @@ export default function SettingsOverlay({ onClose }) {
       <div className="settings-panel">
         <div className="settings-header">
           <span className="settings-title">SETTINGS</span>
-          <button className="settings-close" onClick={onClose} aria-label="Close">
+          <button
+            ref={closeBtnRef}
+            className="settings-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
