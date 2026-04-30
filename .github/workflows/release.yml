@@ -5,9 +5,20 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which platforms to build'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - windows
+          - mac
 
 jobs:
   build-mac:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'both' || github.event.inputs.target == 'mac'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +40,7 @@ jobs:
           path: release/*.dmg
 
   build-win:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'both' || github.event.inputs.target == 'windows'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

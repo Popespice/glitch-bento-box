@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, screen, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exec } from 'node:child_process'
@@ -32,6 +32,17 @@ import nodeIcal from 'node-ical'
 const execAsync = promisify(exec)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// Screen-size presets. Window is resized to these dimensions and the renderer
+// is zoomed by targetWidth / DESIGN_WIDTH so pixel-based UI (DotMatrix dots,
+// fixed font sizes) scales proportionally with the canvas.
+const DESIGN_WIDTH = 1440
+const SCREEN_PRESETS = {
+  native: { w: 1440, h: 900 },
+  '1080p': { w: 1920, h: 1080 },
+  '2.5k': { w: 2560, h: 1440 },
+  '4k': { w: 3840, h: 2160 },
+}
 
 // ---------- Custom protocol (bento://) for Spotify OAuth callback ----------
 // Must be registered before app.whenReady() so the OS knows about the scheme.
@@ -93,6 +104,10 @@ const store = new Store({
     ui: {
       // 1.0 = floor (current sizes); valid presets: 1.0 / 1.15 / 1.3 / 1.5
       textScale: 1.0,
+      // 'native' (1440x900) | '1080p' | '2.5k' | '4k' | 'custom' (set when
+      // the user manually drags the window so the Settings UI doesn't show a
+      // stale highlighted button).
+      screenSize: 'native',
     },
   },
 })
@@ -111,11 +126,29 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
 
 let mainWindow
+let _suppressResizeListener = false // set true while we programmatically resize
+
+// Resolve a screen-size preset to the actual window dims + zoom that should
+// be applied. Clamps to the workArea of the display the window currently
+// sits on so a 4K request on a 1080p panel degrades gracefully.
+function resolveScreenSize(presetKey, displayBounds) {
+  const preset = SCREEN_PRESETS[presetKey] || SCREEN_PRESETS.native
+  const display = displayBounds
+    ? screen.getDisplayMatching(displayBounds)
+    : screen.getPrimaryDisplay()
+  const wa = display.workAreaSize
+  const width = Math.min(preset.w, wa.width)
+  const height = Math.min(preset.h, wa.height)
+  return { width, height, zoom: width / DESIGN_WIDTH, workArea: display.workArea }
+}
 
 function createWindow() {
+  const storedPreset = store.get('ui.screenSize') || 'native'
+  const initial = resolveScreenSize(storedPreset)
+
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: initial.width,
+    height: initial.height,
     minWidth: 1024,
     minHeight: 640,
     backgroundColor: '#000000',
@@ -128,7 +161,26 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      zoomFactor: initial.zoom,
     },
+  })
+
+  // Detect manual user resize → mark preset as 'custom' so the Settings UI
+  // doesn't show a stale highlighted button. Debounced so live drags don't
+  // spam the store. Suppressed during programmatic setBounds calls below.
+  let resizeTimer = null
+  mainWindow.on('resize', () => {
+    if (_suppressResizeListener) return
+    if (resizeTimer) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      const ui = store.get('ui') || {}
+      if (ui.screenSize !== 'custom') {
+        store.set('ui', { ...ui, screenSize: 'custom' })
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('ui:screen-size-changed', 'custom')
+        }
+      }
+    }, 200)
   })
 
   if (VITE_DEV_SERVER_URL) {
@@ -714,7 +766,20 @@ ipcMain.handle('settings:get', () => ({
 }))
 
 ipcMain.handle('settings:set', (_event, key, value) => {
-  store.set(key, value)
+  // For object-shaped sections (ui, weather, github, calendar) merge with the
+  // current value rather than replacing — otherwise a partial update like
+  // `{ textScale }` would clobber sibling keys like `screenSize`.
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const current = store.get(key)
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+      store.set(key, { ...current, ...value })
+    } else {
+      store.set(key, value)
+    }
+  } else {
+    store.set(key, value)
+  }
+
   // Invalidate relevant caches so the next poll picks up new values
   if (key.startsWith('weather')) {
     _weatherCache = null
@@ -724,6 +789,28 @@ ipcMain.handle('settings:set', (_event, key, value) => {
     _heatmapCache = null
     _heatmapFetchedAt = 0
   }
+
+  // Apply screen-size preset: resize the window, recenter on the current
+  // display, and push the new zoom factor to the renderer.
+  if (key === 'ui' && value && typeof value === 'object' && 'screenSize' in value) {
+    const newPreset = value.screenSize
+    if (newPreset && newPreset !== 'custom' && mainWindow && !mainWindow.isDestroyed()) {
+      const bounds = mainWindow.getBounds()
+      const resolved = resolveScreenSize(newPreset, bounds)
+      const wa = resolved.workArea
+      const x = Math.round(wa.x + (wa.width - resolved.width) / 2)
+      const y = Math.round(wa.y + (wa.height - resolved.height) / 2)
+      _suppressResizeListener = true
+      mainWindow.setBounds({ x, y, width: resolved.width, height: resolved.height })
+      // Re-enable the resize listener after the OS has finished animating.
+      setTimeout(() => {
+        _suppressResizeListener = false
+      }, 400)
+      mainWindow.webContents.send('ui:zoom-changed', resolved.zoom)
+      mainWindow.webContents.send('ui:screen-size-changed', newPreset)
+    }
+  }
+
   return true
 })
 

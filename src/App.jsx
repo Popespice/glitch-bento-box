@@ -15,6 +15,14 @@ import SettingsOverlay from './components/SettingsOverlay.jsx'
 import { sys } from './lib/sys.js'
 import { useSettingsChanged } from './lib/useSettingsChanged.js'
 
+const DESIGN_WIDTH = 1440
+const PRESET_WIDTHS = { native: 1440, '1080p': 1920, '2.5k': 2560, '4k': 3840 }
+const zoomFactorFor = (preset) => {
+  const w = PRESET_WIDTHS[preset]
+  return w ? w / DESIGN_WIDTH : 1.0
+}
+const isWideAspect = (preset) => preset === '1080p' || preset === '2.5k' || preset === '4k'
+
 export default function App() {
   const [theme, setTheme] = useState(() => {
     if (typeof window === 'undefined') return 'dark'
@@ -22,20 +30,37 @@ export default function App() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [textScale, setTextScale] = useState(1)
+  const [screenSize, setScreenSize] = useState('native')
 
   useEffect(() => {
     localStorage.setItem('bento-theme', theme)
   }, [theme])
 
-  const loadTextScale = async () => {
+  const loadUi = async () => {
     const s = await sys.settingsGet()
     setTextScale(s?.ui?.textScale ?? 1)
+    const preset = s?.ui?.screenSize ?? 'native'
+    setScreenSize(preset)
+    // Apply renderer zoom optimistically. Main process pushes a corrected
+    // value via ui:zoom-changed if it had to clamp to workArea.
+    sys.setZoom(zoomFactorFor(preset))
   }
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only init
-    loadTextScale()
+    loadUi()
   }, [])
-  useSettingsChanged(['ui'], loadTextScale)
+  useSettingsChanged(['ui'], loadUi)
+
+  // Main process pushes the actually-applied zoom (after workArea clamping)
+  // and the resolved preset (incl. 'custom' on manual user resize).
+  useEffect(() => {
+    const offZoom = sys.onZoomChanged?.((z) => sys.setZoom(z))
+    const offPreset = sys.onScreenSizeChanged?.((p) => setScreenSize(p))
+    return () => {
+      if (typeof offZoom === 'function') offZoom()
+      if (typeof offPreset === 'function') offPreset()
+    }
+  }, [])
 
   // Pause CSS animations when window is hidden — saves significant GPU work
   useEffect(() => {
@@ -50,7 +75,10 @@ export default function App() {
   const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
 
   return (
-    <div className={`dashboard ${theme}`} style={{ '--text-scale': textScale }}>
+    <div
+      className={`dashboard ${theme} ${isWideAspect(screenSize) ? 'aspect-16-9' : 'aspect-16-10'}`}
+      style={{ '--text-scale': textScale }}
+    >
       <div className="left-panel">
         <ClockTile />
         <GlyphTile />

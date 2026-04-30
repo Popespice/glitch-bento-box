@@ -113,6 +113,18 @@ body,
   transition: background 0.35s ease;
 }
 
+/* 16:9 aspect (1080p / 2.5K / 4K presets) — rebalance the grid because the
+   right panel grows wider relative to its height when the canvas widens. */
+.dashboard.aspect-16-9 {
+  grid-template-columns: 4.5fr 7.5fr;
+}
+.dashboard.aspect-16-9 .left-panel {
+  grid-template-rows: 5.5fr 2.75fr 2.75fr;
+}
+.dashboard.aspect-16-9 .right-panel {
+  grid-template-rows: 2.2fr 3.4fr 2.0fr 3.4fr;
+}
+
 /* ============================================================
    TILE BASE
    ============================================================ */

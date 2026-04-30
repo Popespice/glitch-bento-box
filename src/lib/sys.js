@@ -62,9 +62,12 @@ const mocks = {
     github: { username: '' },
     pomodoro: { minutes: 25 },
     spotify: { connected: false },
-    ui: { textScale: 1 },
+    ui: { textScale: 1, screenSize: 'native' },
   }),
   settingsSet: async () => true,
+  setZoom: () => {},
+  onZoomChanged: () => () => {},
+  onScreenSizeChanged: () => () => {},
   settingsGeocode: async (query) => ({
     lat: 40.7128,
     lon: -74.006,

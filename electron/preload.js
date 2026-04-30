@@ -1,6 +1,19 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 
 contextBridge.exposeInMainWorld('bento', {
+  // Renderer-side zoom (webFrame is renderer-process only — no IPC roundtrip)
+  setZoom: (factor) => webFrame.setZoomFactor(factor),
+  onZoomChanged: (cb) => {
+    const handler = (_e, z) => cb(z)
+    ipcRenderer.on('ui:zoom-changed', handler)
+    return () => ipcRenderer.removeListener('ui:zoom-changed', handler)
+  },
+  onScreenSizeChanged: (cb) => {
+    const handler = (_e, preset) => cb(preset)
+    ipcRenderer.on('ui:screen-size-changed', handler)
+    return () => ipcRenderer.removeListener('ui:screen-size-changed', handler)
+  },
+
   // System stats
   platform: () => ipcRenderer.invoke('sys:platform'),
   cpu: () => ipcRenderer.invoke('sys:cpu'),

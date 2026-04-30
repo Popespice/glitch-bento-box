@@ -11,6 +11,13 @@ const TEXT_SIZE_PRESETS = [
   { label: 'XL', value: 1.5 },
 ]
 
+const SCREEN_SIZE_PRESETS = [
+  { label: 'NATIVE', value: 'native' },
+  { label: '1080P', value: '1080p' },
+  { label: '2.5K', value: '2.5k' },
+  { label: '4K', value: '4k' },
+]
+
 export default function SettingsOverlay({ onClose }) {
   const [locationQuery, setLocationQuery] = useState('')
   const [locationName, setLocationName] = useState('')
@@ -21,6 +28,7 @@ export default function SettingsOverlay({ onClose }) {
   const [saved, setSaved] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
   const [textScale, setTextScale] = useState(1)
+  const [screenSize, setScreenSize] = useState('native')
 
   // GitHub OAuth state (Device Flow)
   const [githubConnected, setGithubConnected] = useState(false)
@@ -98,6 +106,7 @@ export default function SettingsOverlay({ onClose }) {
       setSpotifyClientId(s?.spotify?.clientId || '')
       setSpotifyConnected(!!s?.spotify?.connected)
       setTextScale(s?.ui?.textScale ?? 1)
+      setScreenSize(s?.ui?.screenSize ?? 'native')
     })
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only init
     refreshGithubStatus()
@@ -349,7 +358,15 @@ export default function SettingsOverlay({ onClose }) {
 
   const handleTextSizeSelect = async (value) => {
     setTextScale(value)
-    await sys.settingsSet('ui', { textScale: value })
+    // Merge — main also merges, but be explicit so the renderer-side state
+    // mirrors what the store will hold.
+    await sys.settingsSet('ui', { textScale: value, screenSize })
+    dispatchSettingsChanged(['ui'])
+  }
+
+  const handleScreenSizeSelect = async (value) => {
+    setScreenSize(value)
+    await sys.settingsSet('ui', { textScale, screenSize: value })
     dispatchSettingsChanged(['ui'])
   }
 
@@ -395,6 +412,25 @@ export default function SettingsOverlay({ onClose }) {
         </div>
 
         <div className="settings-body">
+        <div className="settings-section">
+          <label className="settings-label">SCREEN SIZE</label>
+          <div className="settings-calendar-tabs">
+            {SCREEN_SIZE_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className={`settings-tab${screenSize === preset.value ? ' settings-tab--active' : ''}`}
+                onClick={() => handleScreenSizeSelect(preset.value)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <span className="settings-hint">
+            Resizes the window and scales the UI. Picks the closest fit if your display is smaller.
+          </span>
+        </div>
+
         <div className="settings-section">
           <label className="settings-label">TEXT SIZE</label>
           <div className="settings-calendar-tabs">
