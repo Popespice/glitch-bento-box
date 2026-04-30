@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, powerSaveBlocker, screen, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, screen, session, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { exec } from 'node:child_process'
+import { exec, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -30,6 +30,38 @@ import { createDAVClient } from 'tsdav'
 import nodeIcal from 'node-ical'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+
+// fetch() with a hard timeout. Without this, a hung connection (rate-limited
+// API, captive portal, dropped wifi mid-request) wedges the IPC handler forever
+// because there is no upstream cancellation. AbortController is the correct
+// fix; the renderer just sees a thrown rejection at the timeout instead.
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const ctrl = new AbortController()
+  const id = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal })
+  } finally {
+    clearTimeout(id)
+  }
+}
+
+// Allowlist for `settings:set` keys. The renderer is trusted today, but a
+// future XSS or compromised dependency would otherwise be able to write to
+// arbitrary store paths (including `__proto__`, `spotify.refreshToken`, or
+// `github.accessToken`). Any new persisted setting must be added here.
+const SETTINGS_ALLOWED_KEYS = new Set([
+  'weather',
+  'github',
+  'github.clientId',
+  'github.username',
+  'spotify',
+  'spotify.clientId',
+  'calendar',
+  'calendar.activeCalendarIds',
+  'pomodoro',
+  'ui',
+])
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -127,6 +159,7 @@ const DIST_PATH = path.join(__dirname, '../dist')
 
 let mainWindow
 let _suppressResizeListener = false // set true while we programmatically resize
+let _renderActive = true // false while window is hidden/minimized — pauses stats sweep
 
 // Resolve a screen-size preset to the actual window dims + zoom that should
 // be applied. Clamps to the workArea of the display the window currently
@@ -165,6 +198,41 @@ function createWindow() {
     },
   })
 
+  // Lock down navigation: deny all window.open and external navigation. With
+  // contextIsolation already on, this is belt-and-suspenders against a future
+  // XSS or stray <a target="_blank">. External URLs route through the OS
+  // default browser via shell.openExternal.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url).catch(() => {})
+    }
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (VITE_DEV_SERVER_URL && url.startsWith(VITE_DEV_SERVER_URL)) return
+    if (url.startsWith('file://')) return
+    event.preventDefault()
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url).catch(() => {})
+    }
+  })
+
+  // Pause the 3s stats sweep while hidden/minimized — saves a non-trivial
+  // amount of CPU (top, ioreg, fsSize). On resume, immediately kick a fresh
+  // sweep so the dashboard isn't showing 3-second-stale data on first paint.
+  mainWindow.on('hide', () => { _renderActive = false })
+  mainWindow.on('minimize', () => { _renderActive = false })
+  mainWindow.on('show', () => {
+    if (!_renderActive) { _renderActive = true; sweepStats() }
+  })
+  mainWindow.on('restore', () => {
+    if (!_renderActive) { _renderActive = true; sweepStats() }
+  })
+
+  // Null out the reference so the `'second-instance'`, `win:close`, and
+  // settings-resize handlers don't try to focus/setBounds on a destroyed window.
+  mainWindow.on('closed', () => { mainWindow = null })
+
   // Detect manual user resize → mark preset as 'custom' so the Settings UI
   // doesn't show a stale highlighted button. Debounced so live drags don't
   // spam the store. Suppressed during programmatic setBounds calls below.
@@ -194,6 +262,29 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Default CSP — restricts scripts/styles to self, allows the few HTTPS hosts
+  // we actually fetch from (Open-Meteo, GitHub, Spotify, Google) and the Vite
+  // dev server. Blocks inline-eval and any third-party iframe load.
+  const csp = [
+    "default-src 'self'",
+    `script-src 'self'${VITE_DEV_SERVER_URL ? " 'unsafe-inline' 'unsafe-eval'" : ''}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https:",
+    "font-src 'self' data:",
+    "connect-src 'self' https: wss: ws://localhost:* http://localhost:*",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join('; ')
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [csp],
+      },
+    })
+  })
+
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -392,7 +483,17 @@ async function getNetStatsWindows() {
   }
 }
 
+// Memoize the in-flight sweep so two cold-start callers don't each kick off
+// a fresh fan-out of subprocess calls (top, ioreg, nvidia-smi, etc.). Both
+// callers wait on the same promise.
+let _inFlightSweep = null
 async function sweepStats() {
+  if (_inFlightSweep) return _inFlightSweep
+  _inFlightSweep = _doSweep().finally(() => { _inFlightSweep = null })
+  return _inFlightSweep
+}
+
+async function _doSweep() {
   // Each si.*() call gets its own timeout + fallback so one slow call can't
   // poison the whole sweep. Last-known-good values come from _statsCache.
   const prev = _statsCache
@@ -548,9 +649,14 @@ async function sweepStats() {
   _statsCache = { cpu, gpu, memory, network, battery, disk: diskResult, fetchedAt: Date.now() }
 }
 
-// Prime the cache immediately then sweep on schedule
+// Prime the cache immediately then sweep on schedule. The interval skips when
+// the window is hidden/minimized — see the `hide`/`minimize` listeners on
+// mainWindow. Cold getStats() callers can still trigger a sweep on demand.
 sweepStats()
-setInterval(sweepStats, STATS_INTERVAL_MS)
+setInterval(() => {
+  if (!_renderActive) return
+  sweepStats()
+}, STATS_INTERVAL_MS)
 
 /** Return cached stats, doing a blocking fetch if cache is cold. */
 async function getStats(key) {
@@ -728,7 +834,7 @@ ipcMain.handle('sys:weather', async () => {
       `?latitude=${lat}&longitude=${lon}` +
       `&current=temperature_2m,weathercode,windspeed_10m,winddirection_10m,relativehumidity_2m` +
       `&temperature_unit=fahrenheit&windspeed_unit=mph&wind_speed_unit=mph`
-    const res = await fetch(url)
+    const res = await fetchWithTimeout(url)
     const json = await res.json()
     const c = json.current
     _weatherCache = {
@@ -766,6 +872,14 @@ ipcMain.handle('settings:get', () => ({
 }))
 
 ipcMain.handle('settings:set', (_event, key, value) => {
+  // Reject anything not in the allowlist. Without this, a renderer-side XSS
+  // could write to spotify.refreshToken / github.accessToken / __proto__ and
+  // either escalate privileges or corrupt the schema.
+  if (typeof key !== 'string' || !SETTINGS_ALLOWED_KEYS.has(key)) {
+    console.warn('[settings:set] rejected key:', key)
+    return false
+  }
+
   // For object-shaped sections (ui, weather, github, calendar) merge with the
   // current value rather than replacing — otherwise a partial update like
   // `{ textScale }` would clobber sibling keys like `screenSize`.
@@ -819,7 +933,7 @@ ipcMain.handle('settings:geocode', async (_event, query) => {
     const url =
       `https://geocoding-api.open-meteo.com/v1/search` +
       `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
-    const res = await fetch(url)
+    const res = await fetchWithTimeout(url)
     const json = await res.json()
     const r = json.results?.[0]
     if (!r) return null
@@ -888,7 +1002,7 @@ ipcMain.handle('sys:github-heatmap', async () => {
 
     if (!token || !login) return null
 
-    const res = await fetch('https://api.github.com/graphql', {
+    const res = await fetchWithTimeout('https://api.github.com/graphql', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -958,7 +1072,7 @@ async function exchangeSpotifyToken(params) {
   const clientId = getSpotifyClientId()
   if (!clientId) throw new Error('Spotify OAuth not configured')
   const body = new URLSearchParams({ ...params, client_id: clientId })
-  const res = await fetch('https://accounts.spotify.com/api/token', {
+  const res = await fetchWithTimeout('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
@@ -1111,6 +1225,11 @@ ipcMain.handle('spotify:connect', async () => {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
+        // Isolate the auth session from the main app's session so that any
+        // cookies or service workers from accounts.spotify.com don't leak
+        // into the dashboard's webview. `persist:` keeps the user signed in
+        // between Connect clicks for convenience.
+        session: session.fromPartition('persist:oauth-spotify'),
       },
     })
 
@@ -1176,7 +1295,7 @@ ipcMain.handle('sys:now-playing', async () => {
 
   let res
   try {
-    res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+    res = await fetchWithTimeout('https://api.spotify.com/v1/me/player/currently-playing', {
       headers: { Authorization: `Bearer ${token}` },
     })
   } catch (err) {
@@ -1239,7 +1358,7 @@ ipcMain.handle('github:connect-start', async () => {
 
   let codeData
   try {
-    const res = await fetch('https://github.com/login/device/code', {
+    const res = await fetchWithTimeout('https://github.com/login/device/code', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
@@ -1274,7 +1393,7 @@ ipcMain.handle('github:connect-start', async () => {
       return
     }
     try {
-      const res = await fetch('https://github.com/login/oauth/access_token', {
+      const res = await fetchWithTimeout('https://github.com/login/oauth/access_token', {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1288,7 +1407,7 @@ ipcMain.handle('github:connect-start', async () => {
       if (data.access_token) {
         let login = ''
         try {
-          const ur = await fetch('https://api.github.com/user', {
+          const ur = await fetchWithTimeout('https://api.github.com/user', {
             headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/vnd.github+json' },
           })
           if (ur.ok) login = (await ur.json()).login || ''
@@ -1390,7 +1509,7 @@ function clearPendingGCalConnect() {
 }
 
 async function exchangeGoogleToken(params) {
-  const res = await fetch(GOOGLE_TOKEN_URL, {
+  const res = await fetchWithTimeout(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -1540,7 +1659,12 @@ ipcMain.handle('calendar:connect-google', async () => {
       height: 700,
       title: 'Connect Google Calendar',
       parent: mainWindow ?? undefined,
-      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        session: session.fromPartition('persist:oauth-google'),
+      },
     })
 
     const cleanup = (err) => {
@@ -1578,7 +1702,7 @@ ipcMain.handle('calendar:connect-google', async () => {
         })
 
         // Get the email needed to construct the CalDAV URL
-        const userinfoRes = await fetch(GOOGLE_USERINFO, {
+        const userinfoRes = await fetchWithTimeout(GOOGLE_USERINFO, {
           headers: { Authorization: `Bearer ${tokenPayload.access_token}` },
         })
         if (!userinfoRes.ok) throw new Error('Could not fetch Google account email')
@@ -2084,8 +2208,11 @@ ipcMain.handle('sys:focus-set', async (_event, shortcutName) => {
   if (process.platform !== 'darwin') return { ok: false, notSupported: true }
   // null shortcutName = deactivate (no standard shortcut for this, so just clear locally)
   if (!shortcutName) return { ok: true }
+  // execFile (argv form) — the prior `\`shortcuts run "${shortcutName}"\``
+  // template was a shell-injection sink: a Shortcut named e.g. `"; rm -rf ~"`
+  // would have escaped the quotes and run.
   try {
-    await execAsync(`/usr/bin/shortcuts run "${shortcutName}"`, { timeout: 15000 })
+    await execFileAsync('/usr/bin/shortcuts', ['run', String(shortcutName)], { timeout: 15000 })
     return { ok: true }
   } catch {
     return { ok: false, notConfigured: true }
