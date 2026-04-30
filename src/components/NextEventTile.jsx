@@ -17,22 +17,32 @@ export default function NextEventTile() {
       const data = await sys.calendarNextEvent()
       if (!data) {
         setStatus('error')
+        setEventData(null)
         return
       }
       setStatus(data.status)
-      if (data.status === 'event')
+      if (data.status === 'event') {
         setEventData({
           title: data.title || '',
           start: data.start,
           calendarName: data.calendarName || '',
         })
+      } else {
+        // Clear stale event data on transitions — without this, going
+        // event → no-event → event briefly shows the prior title.
+        setEventData(null)
+      }
     } catch {
       setStatus('error')
+      setEventData(null)
     }
   }
 
   usePolling(fetchNow, FETCH_MS)
-  usePolling(() => setNow(Date.now()), TICK_MS)
+  // Only run the second-tick poll when a countdown is actually visible. The
+  // tile re-renders on every tick, so unconditionally polling wastes ~1 React
+  // commit/sec for the entire session when no event is upcoming.
+  usePolling(() => setNow(Date.now()), status === 'event' ? TICK_MS : null)
   useSettingsChanged(['calendar'], fetchNow)
 
   // Branch by state — always render the tile chrome so layout doesn't jump.

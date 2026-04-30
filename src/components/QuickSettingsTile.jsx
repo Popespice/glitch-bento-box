@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
 import PixelToggle from './PixelToggle.jsx'
@@ -93,8 +93,16 @@ export default function QuickSettingsTile() {
   const [focusError, setFocusError] = useState(false) // shortcuts not configured
   const [platform, setPlatform] = useState(null) // 'darwin' | 'win32' | 'linux' | null
 
+  // The wifi-toggle re-fetches SSID after a 2s settle delay. Track the timer
+  // id so we can clear it on unmount and not leak, and drop a stale callback
+  // that would land after the component is gone.
+  const wifiSettleRef = useRef(null)
+
   useEffect(() => {
     sys.platform?.().then((p) => setPlatform(p?.platform || null))
+    return () => {
+      if (wifiSettleRef.current) clearTimeout(wifiSettleRef.current)
+    }
   }, [])
 
   const focusSupported = platform === 'darwin' || platform === 'mock'
@@ -132,7 +140,11 @@ export default function QuickSettingsTile() {
         setWifiOn(next)
         setWifiSSID(next ? '…' : 'OFF')
         // Re-fetch SSID after a short delay for the interface to come up
-        setTimeout(fetchStatus, 2000)
+        if (wifiSettleRef.current) clearTimeout(wifiSettleRef.current)
+        wifiSettleRef.current = setTimeout(() => {
+          wifiSettleRef.current = null
+          fetchStatus()
+        }, 2000)
       }
     } finally {
       setWifiBusy(false)
@@ -167,12 +179,17 @@ export default function QuickSettingsTile() {
 
   // ── Focus ───────────────────────────────────────────────────────────────
   const handleFocusMode = async (mode) => {
+    const previous = focusMode
     const newKey = focusMode === mode.key ? null : mode.key
     setFocusMode(newKey) // optimistic
     const shortcutName = newKey ? mode.shortcut : null
     const result = await sys.focusSet(shortcutName)
-    if (!result?.ok && result?.notConfigured) {
-      setFocusError(true)
+    if (result?.ok) {
+      setFocusError(false)
+    } else {
+      // Roll back the optimistic state so the UI matches reality.
+      setFocusMode(previous)
+      if (result?.notConfigured) setFocusError(true)
     }
   }
 

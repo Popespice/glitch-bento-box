@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { sys } from '../lib/sys.js'
 import { useSettingsChanged } from '../lib/useSettingsChanged.js'
 
@@ -54,18 +54,30 @@ export default function HeatmapTile() {
   const [activeCount, setActiveCount] = useState(null)
   const [live, setLive] = useState(false)
   const [login, setLogin] = useState('')
+  // Request id — connect/disconnect can fire multiple fetches; only the
+  // most recent one is allowed to commit state. Without this, a stale
+  // response can land after a fresh one and leave `live=true` showing old data.
+  const reqIdRef = useRef(0)
 
   const fetchHeatmap = () => {
+    const myReq = ++reqIdRef.current
+
     sys
       .githubStatus?.()
-      ?.then((s) => setLogin(s?.login || ''))
+      ?.then((s) => {
+        if (myReq !== reqIdRef.current) return
+        setLogin(s?.login || '')
+      })
       .catch(() => {})
 
     sys
       .githubHeatmap()
       .then((days) => {
-        if (!days?.length) return
-        setCells(realToIntensity(days))
+        if (myReq !== reqIdRef.current) return
+        if (days == null) return // null = not authenticated / unavailable
+        // Treat empty-but-real days as live data (a brand-new account with
+        // no commits yet is still "live"); only null leaves the fallback.
+        setCells(days.length ? realToIntensity(days) : Array(WEEKS * DAYS).fill(0))
         setActiveCount(days.filter((d) => d.count > 0).length)
         setLive(true)
       })

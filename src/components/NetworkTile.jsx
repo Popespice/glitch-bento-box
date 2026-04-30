@@ -21,20 +21,25 @@ export default function NetworkTile() {
   usePolling(async () => {
     try {
       const n = await sys.network()
-      setDown(n.down)
-      setUp(n.up)
+      if (!n) return
+      // Coerce to finite numbers — without this, an undefined field
+      // poisons peakRef and the bar chart heights become NaN%.
+      const dn = Number.isFinite(n.down) ? n.down : 0
+      const up = Number.isFinite(n.up) ? n.up : 0
+      setDown(dn)
+      setUp(up)
       setIface(n.iface)
       setSsid(n.ssid ?? null)
       setIp(n.ip ?? null)
       setType(n.type ?? 'wired')
 
-      peakRef.current = [...peakRef.current.slice(-(PEAK_WINDOW - 1)), n.down]
+      peakRef.current = [...peakRef.current.slice(-(PEAK_WINDOW - 1)), dn]
       setPeakDown(Math.max(...peakRef.current))
 
       // History intensity normalized to 0..1 against the rolling peak so the
       // bar chart stays alive instead of pinning to 0 when peak is high.
       const peak = Math.max(...peakRef.current, 1)
-      const intensity = Math.max(0.06, Math.min(1, n.down / peak))
+      const intensity = Math.max(0.06, Math.min(1, dn / peak))
       setHistory((prev) => [...prev.slice(1), intensity])
     } catch {
       /* ignore */
