@@ -170,8 +170,15 @@ function resolveScreenSize(presetKey, displayBounds) {
     ? screen.getDisplayMatching(displayBounds)
     : screen.getPrimaryDisplay()
   const wa = display.workAreaSize
-  const width = Math.min(preset.w, wa.width)
-  const height = Math.min(preset.h, wa.height)
+  // Preserve preset aspect when clamping. Otherwise an ultrawide workArea
+  // gives 4K its full width but a clipped height; zoom = width/DESIGN_WIDTH
+  // then sets a CSS viewport that's too short for the 16:9 layout, and tiles
+  // squish vertically (chart shrinks, meta lines wrap).
+  const aspect = preset.w / preset.h
+  let width = Math.min(preset.w, wa.width)
+  let height = Math.min(preset.h, wa.height)
+  if (width / height > aspect) width = Math.round(height * aspect)
+  else height = Math.round(width / aspect)
   return { width, height, zoom: width / DESIGN_WIDTH, workArea: display.workArea }
 }
 

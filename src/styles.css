@@ -384,6 +384,7 @@ body,
   display: block;
   width: 100%;
   height: auto; /* preserves 4:1 aspect from viewBox so dots stay round */
+  flex-shrink: 0; /* don't let flex squish below intrinsic — meet would then collapse width */
   margin: 4px 0 6px;
 }
 
