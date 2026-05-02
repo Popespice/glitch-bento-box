@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
 import PixelToggle from './PixelToggle.jsx'
@@ -91,6 +91,21 @@ export default function QuickSettingsTile() {
 
   const [focusMode, setFocusMode] = useState(null) // key string | null
   const [focusError, setFocusError] = useState(false) // shortcuts not configured
+  const [platform, setPlatform] = useState(null) // 'darwin' | 'win32' | 'linux' | null
+
+  // The wifi-toggle re-fetches SSID after a 2s settle delay. Track the timer
+  // id so we can clear it on unmount and not leak, and drop a stale callback
+  // that would land after the component is gone.
+  const wifiSettleRef = useRef(null)
+
+  useEffect(() => {
+    sys.platform?.().then((p) => setPlatform(p?.platform || null))
+    return () => {
+      if (wifiSettleRef.current) clearTimeout(wifiSettleRef.current)
+    }
+  }, [])
+
+  const focusSupported = platform === 'darwin' || platform === 'mock'
 
   // ── Status polling ──────────────────────────────────────────────────────
   const fetchStatus = async () => {
@@ -125,7 +140,11 @@ export default function QuickSettingsTile() {
         setWifiOn(next)
         setWifiSSID(next ? '…' : 'OFF')
         // Re-fetch SSID after a short delay for the interface to come up
-        setTimeout(fetchStatus, 2000)
+        if (wifiSettleRef.current) clearTimeout(wifiSettleRef.current)
+        wifiSettleRef.current = setTimeout(() => {
+          wifiSettleRef.current = null
+          fetchStatus()
+        }, 2000)
       }
     } finally {
       setWifiBusy(false)
@@ -160,12 +179,17 @@ export default function QuickSettingsTile() {
 
   // ── Focus ───────────────────────────────────────────────────────────────
   const handleFocusMode = async (mode) => {
+    const previous = focusMode
     const newKey = focusMode === mode.key ? null : mode.key
     setFocusMode(newKey) // optimistic
     const shortcutName = newKey ? mode.shortcut : null
     const result = await sys.focusSet(shortcutName)
-    if (!result?.ok && result?.notConfigured) {
-      setFocusError(true)
+    if (result?.ok) {
+      setFocusError(false)
+    } else {
+      // Roll back the optimistic state so the UI matches reality.
+      setFocusMode(previous)
+      if (result?.notConfigured) setFocusError(true)
     }
   }
 
@@ -204,28 +228,30 @@ export default function QuickSettingsTile() {
           </div>
         </div>
 
-        {/* ── Focus ── */}
-        <div className="setting-row focus-row">
-          <span className="setting-name">FOCUS</span>
-          <div className="focus-modes-row">
-            {FOCUS_MODES.map((mode) => (
-              <button
-                key={mode.key}
-                className={`focus-mode-btn${focusMode === mode.key ? ' focus-mode-btn--active' : ''}`}
-                onClick={() => handleFocusMode(mode)}
-                title={mode.shortcut}
-              >
-                <FocusIcon pattern={mode.icon} active={focusMode === mode.key} />
-                <span className="focus-mode-label">
-                  <DotMatrix text={mode.label} />
-                </span>
-              </button>
-            ))}
+        {/* ── Focus ── (macOS only — Windows Focus Assist has no clean CLI) */}
+        {focusSupported && (
+          <div className="setting-row focus-row">
+            <span className="setting-name">FOCUS</span>
+            <div className="focus-modes-row">
+              {FOCUS_MODES.map((mode) => (
+                <button
+                  key={mode.key}
+                  className={`focus-mode-btn${focusMode === mode.key ? ' focus-mode-btn--active' : ''}`}
+                  onClick={() => handleFocusMode(mode)}
+                  title={mode.shortcut}
+                >
+                  <FocusIcon pattern={mode.icon} active={focusMode === mode.key} />
+                  <span className="focus-mode-label">
+                    <DotMatrix text={mode.label} />
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
-      {focusError && (
+      {focusSupported && focusError && (
         <button className="focus-setup-hint" onClick={openShortcutsApp}>
           SETUP SHORTCUTS ↗
         </button>

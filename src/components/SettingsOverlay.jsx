@@ -11,6 +11,13 @@ const TEXT_SIZE_PRESETS = [
   { label: 'XL', value: 1.5 },
 ]
 
+const SCREEN_SIZE_PRESETS = [
+  { label: 'NATIVE', value: 'native' },
+  { label: '1080P', value: '1080p' },
+  { label: '2.5K', value: '2.5k' },
+  { label: '4K', value: '4k' },
+]
+
 export default function SettingsOverlay({ onClose }) {
   const [locationQuery, setLocationQuery] = useState('')
   const [locationName, setLocationName] = useState('')
@@ -21,18 +28,26 @@ export default function SettingsOverlay({ onClose }) {
   const [saved, setSaved] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
   const [textScale, setTextScale] = useState(1)
+  const [screenSize, setScreenSize] = useState('native')
 
-  // GitHub PAT state
+  // GitHub OAuth state (Device Flow)
   const [githubConnected, setGithubConnected] = useState(false)
-  const [githubSaving, setGithubSaving] = useState(false)
   const [githubLogin, setGithubLogin] = useState('')
   const [githubError, setGithubError] = useState('')
-  const [githubPat, setGithubPat] = useState('')
+  const [githubAwaiting, setGithubAwaiting] = useState(false)
+  const [githubUserCode, setGithubUserCode] = useState('')
+  const [githubVerificationUri, setGithubVerificationUri] = useState('')
+  const [githubClientId, setGithubClientId] = useState('')
+  const [githubClientIdInput, setGithubClientIdInput] = useState('')
+  const [githubEditingCreds, setGithubEditingCreds] = useState(false)
 
-  // Spotify state — credentials are bundled, so this is just connect/disconnect.
+  // Spotify state — user-supplied client_id (PKCE), refresh token after Connect.
   const [spotifyConnected, setSpotifyConnected] = useState(false)
   const [spotifyConnecting, setSpotifyConnecting] = useState(false)
   const [spotifyError, setSpotifyError] = useState('')
+  const [spotifyClientId, setSpotifyClientId] = useState('')
+  const [spotifyClientIdInput, setSpotifyClientIdInput] = useState('')
+  const [spotifyEditingCreds, setSpotifyEditingCreds] = useState(false)
 
   // Calendar state — provider-aware (iCloud or Google), with calendar picker.
   const [calProvider, setCalProvider] = useState(null) // persisted provider
@@ -75,34 +90,101 @@ export default function SettingsOverlay({ onClose }) {
     }
   }
 
-  // Load existing settings on mount
+  // Load existing settings on mount. If the IPC roundtrip resolves AFTER the
+  // user has already started typing (slow disk, busy main thread), we'd
+  // otherwise overwrite their input with the stored value. Drop the result
+  // entirely if the panel has been closed or an interaction flag is set.
+  const cancelledRef = useRef(false)
   useEffect(() => {
+    cancelledRef.current = false
     sys.settingsGet().then((s) => {
-      if (s?.weather?.query) setLocationQuery(s.weather.query)
-      if (s?.weather?.locationName) setLocationName(s.weather.locationName)
-      if (s?.weather?.lat != null)
-        setResolvedCoords({
-          lat: s.weather.lat,
-          lon: s.weather.lon,
-          timezone: s.weather.timezone || '',
-        })
-      if (s?.github?.username) setGithubUser(s.github.username)
+      if (cancelledRef.current) return
+      // For text inputs, only seed if the user hasn't typed yet (still empty).
+      // The radio-style fields (textScale, screenSize) and read-only flags
+      // (clientId, connected) are safe to set unconditionally.
+      setLocationQuery((cur) => (cur ? cur : s?.weather?.query || ''))
+      setLocationName((cur) => (cur ? cur : s?.weather?.locationName || ''))
+      if (s?.weather?.lat != null) {
+        setResolvedCoords((cur) =>
+          cur
+            ? cur
+            : {
+                lat: s.weather.lat,
+                lon: s.weather.lon,
+                timezone: s.weather.timezone || '',
+              }
+        )
+      }
+      setGithubUser((cur) => (cur ? cur : s?.github?.username || ''))
+      setGithubClientId(s?.github?.clientId || '')
+      setSpotifyClientId(s?.spotify?.clientId || '')
       setSpotifyConnected(!!s?.spotify?.connected)
       setTextScale(s?.ui?.textScale ?? 1)
+      setScreenSize(s?.ui?.screenSize ?? 'native')
     })
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only init
     refreshGithubStatus()
     refreshCalendarStatus()
+    return () => {
+      cancelledRef.current = true
+    }
   }, [])
 
-  // Escape key to close
+  // Listen for GitHub Device Flow completion (sent from main process when
+  // GitHub finally returns an access token or the flow fails/expires).
+  useEffect(() => {
+    if (!sys.onGithubAuthResult) return
+    const unsubscribe = sys.onGithubAuthResult((result) => {
+      setGithubAwaiting(false)
+      setGithubUserCode('')
+      setGithubVerificationUri('')
+      if (result?.ok) {
+        setGithubError('')
+        refreshGithubStatus()
+        dispatchSettingsChanged(['github'])
+      } else {
+        setGithubError(result?.error || 'Authorization failed')
+      }
+    })
+    return unsubscribe
+  }, [])
+
+  // Escape key to close + Tab focus trap. Without trapping, Tab moves focus
+  // into the dashboard tiles behind the modal — confusing for keyboard users
+  // and an accessibility violation.
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const panel = overlayRef.current
+      if (!panel) return
+      const focusables = panel.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      if (!focusables.length) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // Autofocus the close button on open so keyboard users land somewhere
+  // sensible (instead of staying on the gear button behind the modal).
+  const closeBtnRef = useRef(null)
+  useEffect(() => {
+    closeBtnRef.current?.focus()
+  }, [])
 
   // Click outside to close
   const handleBackdropClick = (e) => {
@@ -135,24 +217,67 @@ export default function SettingsOverlay({ onClose }) {
     if (e.key === 'Enter') geocode(locationQuery)
   }
 
-  const handleGithubSave = async () => {
-    if (!githubPat.trim()) return
-    setGithubSaving(true)
+  const handleGithubSaveClientId = async () => {
+    const id = githubClientIdInput.trim()
+    if (!id) return
+    await sys.settingsSet('github.clientId', id)
+    setGithubClientId(id)
+    setGithubClientIdInput('')
+    setGithubEditingCreds(false)
+    setGithubError('')
+  }
+
+  const handleGithubClearClientId = async () => {
+    if (!window.confirm('Replace OAuth client ID? You will be signed out.')) return
+    await sys.githubDisconnect()
+    await sys.settingsSet('github.clientId', '')
+    setGithubClientId('')
+    await refreshGithubStatus()
+  }
+
+  const handleSpotifySaveClientId = async () => {
+    const id = spotifyClientIdInput.trim()
+    if (!id) return
+    await sys.settingsSet('spotify.clientId', id)
+    setSpotifyClientId(id)
+    setSpotifyClientIdInput('')
+    setSpotifyEditingCreds(false)
+    setSpotifyError('')
+  }
+
+  const handleSpotifyClearClientId = async () => {
+    if (!window.confirm('Replace OAuth client ID? You will be signed out.')) return
+    await sys.spotifyDisconnect()
+    await sys.settingsSet('spotify.clientId', '')
+    setSpotifyClientId('')
+    await refreshSpotifyStatus()
+  }
+
+  const handleGithubConnect = async () => {
     setGithubError('')
     try {
-      const result = await sys.githubConnect(githubPat.trim())
+      const result = await sys.githubConnectStart()
       if (result?.ok) {
-        setGithubPat('') // clear from input after saving
-        await refreshGithubStatus()
-        dispatchSettingsChanged(['github'])
+        setGithubUserCode(result.userCode || '')
+        setGithubVerificationUri(result.verificationUri || '')
+        setGithubAwaiting(true)
       } else {
-        setGithubError(result?.error || 'Token validation failed')
+        setGithubError(result?.error || 'Sign-in failed to start')
       }
     } catch (err) {
-      setGithubError(err?.message || 'Token validation failed')
-    } finally {
-      setGithubSaving(false)
+      setGithubError(err?.message || 'Sign-in failed to start')
     }
+  }
+
+  const handleGithubReopenBrowser = () => {
+    if (githubVerificationUri) sys.openExternal?.(githubVerificationUri)
+  }
+
+  const handleGithubCancel = async () => {
+    await sys.githubConnectCancel?.()
+    setGithubAwaiting(false)
+    setGithubUserCode('')
+    setGithubVerificationUri('')
   }
 
   const handleGithubDisconnect = async () => {
@@ -179,6 +304,13 @@ export default function SettingsOverlay({ onClose }) {
     } finally {
       setSpotifyConnecting(false)
     }
+  }
+
+  const handleSpotifyCancel = async () => {
+    await sys.spotifyConnectCancel?.()
+    // The pending connect's promise will resolve/reject from the cancel,
+    // which flips spotifyConnecting back to false in handleSpotifyConnect's
+    // finally block — no need to set state here.
   }
 
   const handleSpotifyDisconnect = async () => {
@@ -236,6 +368,10 @@ export default function SettingsOverlay({ onClose }) {
     }
   }
 
+  const handleCalendarGoogleCancel = async () => {
+    await sys.calendarConnectGoogleCancel?.()
+  }
+
   const handleCalendarDisconnect = async () => {
     if (!window.confirm('Disconnect calendar? All credentials will be wiped from local storage.'))
       return
@@ -267,7 +403,15 @@ export default function SettingsOverlay({ onClose }) {
 
   const handleTextSizeSelect = async (value) => {
     setTextScale(value)
-    await sys.settingsSet('ui', { textScale: value })
+    // Merge — main also merges, but be explicit so the renderer-side state
+    // mirrors what the store will hold.
+    await sys.settingsSet('ui', { textScale: value, screenSize })
+    dispatchSettingsChanged(['ui'])
+  }
+
+  const handleScreenSizeSelect = async (value) => {
+    setScreenSize(value)
+    await sys.settingsSet('ui', { textScale, screenSize: value })
     dispatchSettingsChanged(['ui'])
   }
 
@@ -307,12 +451,36 @@ export default function SettingsOverlay({ onClose }) {
       <div className="settings-panel">
         <div className="settings-header">
           <span className="settings-title">SETTINGS</span>
-          <button className="settings-close" onClick={onClose} aria-label="Close">
+          <button
+            ref={closeBtnRef}
+            className="settings-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
 
         <div className="settings-body">
+        <div className="settings-section">
+          <label className="settings-label">SCREEN SIZE</label>
+          <div className="settings-calendar-tabs">
+            {SCREEN_SIZE_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className={`settings-tab${screenSize === preset.value ? ' settings-tab--active' : ''}`}
+                onClick={() => handleScreenSizeSelect(preset.value)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <span className="settings-hint">
+            Resizes the window and scales the UI. Picks the closest fit if your display is smaller.
+          </span>
+        </div>
+
         <div className="settings-section">
           <label className="settings-label">TEXT SIZE</label>
           <div className="settings-calendar-tabs">
@@ -360,49 +528,112 @@ export default function SettingsOverlay({ onClose }) {
         <div className="settings-section">
           <label className="settings-label">GITHUB</label>
           {githubConnected ? (
-            <div className="settings-spotify-row">
-              <span className="settings-status settings-status--ok">
-                ✓ {githubLogin || 'CONNECTED'}
-              </span>
+            <>
+              <div className="settings-spotify-row">
+                <span className="settings-status settings-status--ok">
+                  ✓ {githubLogin || 'CONNECTED'}
+                </span>
+                <button
+                  className="settings-button settings-button--ghost"
+                  onClick={handleGithubDisconnect}
+                >
+                  DISCONNECT
+                </button>
+              </div>
               <button
-                className="settings-button settings-button--ghost"
-                onClick={handleGithubDisconnect}
+                className="settings-link-button"
+                onClick={handleGithubClearClientId}
               >
-                DISCONNECT
+                Change OAuth App
               </button>
-            </div>
-          ) : (
+            </>
+          ) : !githubClientId || githubEditingCreds ? (
             <>
               <input
                 className="settings-input"
-                type="password"
-                placeholder="Paste a Personal Access Token"
-                value={githubPat}
-                onChange={(e) => setGithubPat(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleGithubSave()}
+                type="text"
+                placeholder="Paste your GitHub OAuth Client ID"
+                value={githubClientIdInput}
+                onChange={(e) => setGithubClientIdInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleGithubSaveClientId()}
                 autoComplete="off"
                 spellCheck={false}
               />
               <div className="settings-spotify-row">
-                {githubSaving && <span className="settings-status">VALIDATING…</span>}
-                {!githubSaving && githubError && (
-                  <span className="settings-status settings-status--err">{githubError}</span>
-                )}
-                {!githubSaving && !githubError && (
-                  <span className="settings-status">NOT CONNECTED</span>
-                )}
+                <span className="settings-status">
+                  {githubClientId ? 'EDIT OAUTH APP' : 'NOT CONFIGURED'}
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {githubEditingCreds && (
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={() => {
+                        setGithubEditingCreds(false)
+                        setGithubClientIdInput('')
+                      }}
+                    >
+                      CANCEL
+                    </button>
+                  )}
+                  <button
+                    className="settings-button"
+                    onClick={handleGithubSaveClientId}
+                    disabled={!githubClientIdInput.trim()}
+                  >
+                    SAVE
+                  </button>
+                </div>
+              </div>
+              <span className="settings-hint">
+                Register a Device-Flow OAuth App at{' '}
+                <code>github.com/settings/applications/new</code>. Check{' '}
+                <strong>Enable Device Flow</strong>, then paste the Client ID. See the README for
+                full instructions.
+              </span>
+            </>
+          ) : githubAwaiting ? (
+            <>
+              <div className="settings-github-code-row">
+                <span className="settings-status">CODE IN BROWSER:</span>
+                <span className="settings-github-code">{githubUserCode}</span>
+              </div>
+              <div className="settings-spotify-row">
+                <span className="settings-status">WAITING FOR AUTHORIZATION…</span>
                 <button
-                  className="settings-button"
-                  onClick={handleGithubSave}
-                  disabled={githubSaving || !githubPat.trim()}
+                  className="settings-button settings-button--ghost"
+                  onClick={handleGithubReopenBrowser}
                 >
-                  SAVE TOKEN
+                  REOPEN ↗
+                </button>
+                <button
+                  className="settings-button settings-button--ghost"
+                  onClick={handleGithubCancel}
+                >
+                  CANCEL
                 </button>
               </div>
               <span className="settings-hint">
-                Generate at github.com/settings/tokens — needs <code>read:user</code> scope. Falls
-                back to gh CLI if blank.
+                Verify this code matches the one shown in your browser, then click Authorize.
               </span>
+            </>
+          ) : (
+            <>
+              <div className="settings-spotify-row">
+                {githubError ? (
+                  <span className="settings-status settings-status--err">{githubError}</span>
+                ) : (
+                  <span className="settings-status">NOT CONNECTED</span>
+                )}
+                <button className="settings-button" onClick={handleGithubConnect}>
+                  SIGN IN WITH GITHUB
+                </button>
+              </div>
+              <button
+                className="settings-link-button"
+                onClick={handleGithubClearClientId}
+              >
+                Change OAuth App
+              </button>
             </>
           )}
         </div>
@@ -501,19 +732,26 @@ export default function SettingsOverlay({ onClose }) {
                     DISCONNECT
                   </button>
                 </>
+              ) : calConnecting ? (
+                <>
+                  <span className="settings-status">WAITING FOR BROWSER…</span>
+                  <button
+                    className="settings-button settings-button--ghost"
+                    onClick={handleCalendarGoogleCancel}
+                  >
+                    CANCEL
+                  </button>
+                </>
               ) : (
                 <>
-                  {calConnecting && <span className="settings-status">WAITING FOR BROWSER…</span>}
-                  {!calConnecting && calError && (
+                  {calError ? (
                     <span className="settings-status settings-status--err">{calError}</span>
-                  )}
-                  {!calConnecting && !calError && (
+                  ) : (
                     <span className="settings-status">NOT CONNECTED</span>
                   )}
                   <button
                     className="settings-button"
                     onClick={handleCalendarConnectGoogle}
-                    disabled={calConnecting}
                   >
                     CONNECT GOOGLE
                   </button>
@@ -550,40 +788,94 @@ export default function SettingsOverlay({ onClose }) {
 
         <div className="settings-section">
           <label className="settings-label">SPOTIFY</label>
-          <div className="settings-spotify-row">
-            {spotifyConnected ? (
-              <>
-                <span className="settings-status settings-status--ok">✓ CONNECTED</span>
-                <button
-                  className="settings-button settings-button--ghost"
-                  onClick={handleSpotifyDisconnect}
-                >
-                  DISCONNECT
-                </button>
-              </>
-            ) : (
-              <>
-                {spotifyConnecting && <span className="settings-status">WAITING FOR BROWSER…</span>}
-                {!spotifyConnecting && spotifyError && (
-                  <span className="settings-status settings-status--err">{spotifyError}</span>
+          {!spotifyClientId || spotifyEditingCreds ? (
+            <>
+              <input
+                className="settings-input"
+                type="text"
+                placeholder="Paste your Spotify OAuth Client ID"
+                value={spotifyClientIdInput}
+                onChange={(e) => setSpotifyClientIdInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSpotifySaveClientId()}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="settings-spotify-row">
+                <span className="settings-status">
+                  {spotifyClientId ? 'EDIT OAUTH APP' : 'NOT CONFIGURED'}
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {spotifyEditingCreds && (
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={() => {
+                        setSpotifyEditingCreds(false)
+                        setSpotifyClientIdInput('')
+                      }}
+                    >
+                      CANCEL
+                    </button>
+                  )}
+                  <button
+                    className="settings-button"
+                    onClick={handleSpotifySaveClientId}
+                    disabled={!spotifyClientIdInput.trim()}
+                  >
+                    SAVE
+                  </button>
+                </div>
+              </div>
+              <span className="settings-hint">
+                Register a PKCE app at <code>developer.spotify.com/dashboard</code> with{' '}
+                <code>bento://callback</code> as a Redirect URI, then paste the Client ID. See the
+                README for full instructions.
+              </span>
+            </>
+          ) : (
+            <>
+              <div className="settings-spotify-row">
+                {spotifyConnected ? (
+                  <>
+                    <span className="settings-status settings-status--ok">✓ CONNECTED</span>
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={handleSpotifyDisconnect}
+                    >
+                      DISCONNECT
+                    </button>
+                  </>
+                ) : spotifyConnecting ? (
+                  <>
+                    <span className="settings-status">WAITING FOR BROWSER…</span>
+                    <button
+                      className="settings-button settings-button--ghost"
+                      onClick={handleSpotifyCancel}
+                    >
+                      CANCEL
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {spotifyError ? (
+                      <span className="settings-status settings-status--err">{spotifyError}</span>
+                    ) : (
+                      <span className="settings-status">NOT CONNECTED</span>
+                    )}
+                    <button className="settings-button" onClick={handleSpotifyConnect}>
+                      CONNECT SPOTIFY
+                    </button>
+                  </>
                 )}
-                {!spotifyConnecting && !spotifyError && (
-                  <span className="settings-status">NOT CONNECTED</span>
-                )}
-                <button
-                  className="settings-button"
-                  onClick={handleSpotifyConnect}
-                  disabled={spotifyConnecting}
-                >
-                  CONNECT SPOTIFY
-                </button>
-              </>
-            )}
-          </div>
-          <span className="settings-hint">
-            Sign in once. Only your refresh token is stored locally — disconnect any time to wipe
-            it.
-          </span>
+              </div>
+              <button
+                className="settings-link-button"
+                onClick={handleSpotifyClearClientId}
+              >
+                Change OAuth App
+              </button>
+            </>
+          )}
+        </div>
         </div>
         </div>
 

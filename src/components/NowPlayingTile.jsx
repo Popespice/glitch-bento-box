@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
@@ -35,13 +35,6 @@ export default function NowPlayingTile() {
   const [position, setPosition] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
 
-  // Hold the latest playing flag in a ref so the local-tick interval
-  // can read it without resetting whenever it changes.
-  const isPlayingRef = useRef(false)
-  useEffect(() => {
-    isPlayingRef.current = isPlaying && status === 'playing'
-  }, [isPlaying, status])
-
   const fetchNow = async () => {
     try {
       const data = await sys.nowPlaying()
@@ -68,19 +61,19 @@ export default function NowPlayingTile() {
   // Refetch immediately on connect/disconnect rather than waiting for the 5s poll.
   useSettingsChanged(['spotify'], fetchNow)
 
-  // Local 1s interpolation — only ticks when actually playing. Each upstream
-  // fetch snaps `position` back to the server value, so drift can't accumulate.
+  // Local 1s interpolation — only attached while actually playing. Each
+  // upstream fetch snaps `position` back to the server value so drift can't
+  // accumulate. Gating the effect itself (instead of reading a ref inside an
+  // always-running interval) means StrictMode double-mount doesn't double-tick.
   useEffect(() => {
+    if (!isPlaying || status !== 'playing') return
+    const dur = track?.duration ?? 0
+    if (!dur) return
     const id = setInterval(() => {
-      if (!isPlayingRef.current) return
-      setPosition((p) => {
-        const dur = track?.duration ?? 0
-        if (!dur) return p
-        return Math.min(dur, p + 1)
-      })
+      setPosition((p) => Math.min(dur, p + 1))
     }, TICK_MS)
     return () => clearInterval(id)
-  }, [track?.duration])
+  }, [isPlaying, status, track?.duration])
 
   // Branch render by state. We always draw the tile chrome (label + waveform)
   // so the layout doesn't jump around as Spotify state changes.

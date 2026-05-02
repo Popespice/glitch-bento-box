@@ -1,30 +1,30 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import DotMatrix from './DotMatrix.jsx'
 import { sys } from '../lib/sys.js'
 import { usePolling } from '../lib/usePolling.js'
 import { useSettingsChanged } from '../lib/useSettingsChanged.js'
 
-// Pull HH/mm/day/month/year as separate parts so we can re-assemble in our
-// custom format while still letting Intl handle the timezone math.
-function partsFor(date, timezone) {
-  const opts = {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    weekday: 'long',
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  }
-  if (timezone) opts.timeZone = timezone
-  let formatter
+const FORMAT_OPTS = {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+  weekday: 'long',
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+}
+
+function buildFormatter(timezone) {
+  const opts = timezone ? { ...FORMAT_OPTS, timeZone: timezone } : FORMAT_OPTS
   try {
-    formatter = new Intl.DateTimeFormat('en-US', opts)
+    return new Intl.DateTimeFormat('en-US', opts)
   } catch {
     // Bad timezone string — fall back to system local.
-    delete opts.timeZone
-    formatter = new Intl.DateTimeFormat('en-US', opts)
+    return new Intl.DateTimeFormat('en-US', FORMAT_OPTS)
   }
+}
+
+function partsFor(formatter, date) {
   const map = {}
   for (const p of formatter.formatToParts(date)) map[p.type] = p.value
   return {
@@ -52,7 +52,9 @@ export default function ClockTile() {
   useSettingsChanged(['weather'], loadSettings)
   usePolling(() => setNow(new Date()), 1000)
 
-  const { time, day, date } = partsFor(now, timezone)
+  // Construct the formatter once per timezone change, not once per second.
+  const formatter = useMemo(() => buildFormatter(timezone), [timezone])
+  const { time, day, date } = partsFor(formatter, now)
   const locLabel = locationName ? locationName.toUpperCase() : 'SET LOCATION IN SETTINGS'
 
   return (

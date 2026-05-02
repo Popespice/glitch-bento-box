@@ -113,6 +113,18 @@ body,
   transition: background 0.35s ease;
 }
 
+/* 16:9 aspect (1080p / 2.5K / 4K presets) — rebalance the grid because the
+   right panel grows wider relative to its height when the canvas widens. */
+.dashboard.aspect-16-9 {
+  grid-template-columns: 4.5fr 7.5fr;
+}
+.dashboard.aspect-16-9 .left-panel {
+  grid-template-rows: 5.5fr 2.75fr 2.75fr;
+}
+.dashboard.aspect-16-9 .right-panel {
+  grid-template-rows: 2.2fr 3.4fr 2.0fr 3.4fr;
+}
+
 /* ============================================================
    TILE BASE
    ============================================================ */
@@ -372,6 +384,7 @@ body,
   display: block;
   width: 100%;
   height: auto; /* preserves 4:1 aspect from viewBox so dots stay round */
+  flex-shrink: 0; /* don't let flex squish below intrinsic — meet would then collapse width */
   margin: 4px 0 6px;
 }
 
@@ -1192,6 +1205,46 @@ body,
   margin-top: 14px;
   font-size: calc(9px * var(--text-scale));
   opacity: 0.75;
+}
+
+/* Tertiary action ("Change OAuth App") under the main connect/disconnect row.
+   Plain text styled like a footnote link — visually subordinate so it doesn't
+   compete with the primary action. */
+.settings-link-button {
+  font-family: 'Space Mono', monospace;
+  font-size: calc(9px * var(--text-scale));
+  letter-spacing: 0.08em;
+  color: var(--text-label);
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-top: 6px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-link-button:hover {
+  color: var(--text-secondary);
+}
+
+/* GitHub Device Flow user-code display: the XXXX-XXXX one-time code shown
+   while waiting for browser authorization. Big and monospaced so the user
+   can verify it matches what GitHub shows them. */
+.settings-github-code-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 6px;
+}
+
+.settings-github-code {
+  font-family: 'Space Mono', monospace;
+  font-size: calc(18px * var(--text-scale));
+  letter-spacing: 0.18em;
+  color: var(--text-primary);
+  font-weight: 700;
 }
 
 .settings-calendar-tabs {

@@ -1,25 +1,80 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, screen, session, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { exec, spawn } from 'node:child_process'
+import { exec, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
 import crypto from 'node:crypto'
 import si from 'systeminformation'
 import Store from 'electron-store'
-import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI } from './spotify-config.js'
 import {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI,
 } from './google-calendar-config.js'
+
+// Redirect URIs are identical for every install (the user must add them to
+// their OAuth App's allowed list during registration). The OAuth client_ids
+// themselves are user-supplied at runtime via Settings (see store schema).
+const SPOTIFY_REDIRECT_URI = 'bento://callback'
+
+function getGithubClientId() {
+  return (store.get('github.clientId') || '').trim()
+}
+
+function getSpotifyClientId() {
+  return (store.get('spotify.clientId') || '').trim()
+}
 import { createDAVClient } from 'tsdav'
 import nodeIcal from 'node-ical'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+
+// fetch() with a hard timeout. Without this, a hung connection (rate-limited
+// API, captive portal, dropped wifi mid-request) wedges the IPC handler forever
+// because there is no upstream cancellation. AbortController is the correct
+// fix; the renderer just sees a thrown rejection at the timeout instead.
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const ctrl = new AbortController()
+  const id = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal })
+  } finally {
+    clearTimeout(id)
+  }
+}
+
+// Allowlist for `settings:set` keys. The renderer is trusted today, but a
+// future XSS or compromised dependency would otherwise be able to write to
+// arbitrary store paths (including `__proto__`, `spotify.refreshToken`, or
+// `github.accessToken`). Any new persisted setting must be added here.
+const SETTINGS_ALLOWED_KEYS = new Set([
+  'weather',
+  'github',
+  'github.clientId',
+  'github.username',
+  'spotify',
+  'spotify.clientId',
+  'calendar',
+  'calendar.activeCalendarIds',
+  'pomodoro',
+  'ui',
+])
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// Screen-size presets. Window is resized to these dimensions and the renderer
+// is zoomed by targetWidth / DESIGN_WIDTH so pixel-based UI (DotMatrix dots,
+// fixed font sizes) scales proportionally with the canvas.
+const DESIGN_WIDTH = 1440
+const SCREEN_PRESETS = {
+  native: { w: 1440, h: 900 },
+  '1080p': { w: 1920, h: 1080 },
+  '2.5k': { w: 2560, h: 1440 },
+  '4k': { w: 3840, h: 2160 },
+}
 
 // ---------- Custom protocol (bento://) for Spotify OAuth callback ----------
 // Must be registered before app.whenReady() so the OS knows about the scheme.
@@ -49,19 +104,22 @@ const store = new Store({
       timezone: '',
     },
     github: {
-      username: '',   // manual override / gh-CLI fallback
+      clientId: '',      // user-supplied OAuth App client_id (from github.com/settings/applications)
+      username: '',      // manual override / gh-CLI fallback
       accessToken: null, // GitHub OAuth access token (stored after Connect)
       login: '',         // username resolved via OAuth
     },
     pomodoro: {
       minutes: 25,
     },
-    // Privacy: this section holds exactly one field — the OAuth refresh token,
-    // and only after the user explicitly clicks Connect. It's nulled on Disconnect.
-    // No client ID/secret (those are bundled at build time, not user data),
-    // no access token (kept in main-process memory only), no display name,
-    // no email/profile/listening data of any kind.
+    // Privacy: this section holds exactly two fields — the user-supplied
+    // client_id (a public identifier they pasted from developer.spotify.com),
+    // and the OAuth refresh token (only after the user explicitly clicks
+    // Connect, nulled on Disconnect). No client_secret (PKCE eliminates the
+    // need for one), no access token (kept in main-process memory only),
+    // no display name, no email/profile/listening data of any kind.
     spotify: {
+      clientId: '',      // user-supplied OAuth App client_id (from developer.spotify.com)
       refreshToken: null,
     },
     // Privacy: stored locally only. iCloud uses an app-specific password (user
@@ -78,6 +136,10 @@ const store = new Store({
     ui: {
       // 1.0 = floor (current sizes); valid presets: 1.0 / 1.15 / 1.3 / 1.5
       textScale: 1.0,
+      // 'native' (1440x900) | '1080p' | '2.5k' | '4k' | 'custom' (set when
+      // the user manually drags the window so the Settings UI doesn't show a
+      // stale highlighted button).
+      screenSize: 'native',
     },
   },
 })
@@ -87,18 +149,46 @@ let _spotifyAccess = null // { token: string, expiresAt: number (ms epoch) }
 let _pendingConnect = null // { resolve, reject, state, timeoutId } during Spotify OAuth flow
 let _googleAccess = null // { token: string, expiresAt: number }
 let _pendingGCalConnect = null // { resolve, reject, state, timeoutId } during Google OAuth flow
-let _caffeinateProc = null // ChildProcess | null — caffeinate -d background process
+let _powerSaveId = null // number | null — Electron powerSaveBlocker ID while keep-awake is on
 let _btHelperPath = null // string | null — path to compiled Swift BT helper binary
+let _wifiAdapterName = null // string | null — cached Windows Wi-Fi interface name
+let _githubDeviceFlow = null // { deviceCode, timerId, abort } during active GitHub Device Flow
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const DIST_PATH = path.join(__dirname, '../dist')
 
 let mainWindow
+let _suppressResizeListener = false // set true while we programmatically resize
+let _renderActive = true // false while window is hidden/minimized — pauses stats sweep
+
+// Resolve a screen-size preset to the actual window dims + zoom that should
+// be applied. Clamps to the workArea of the display the window currently
+// sits on so a 4K request on a 1080p panel degrades gracefully.
+function resolveScreenSize(presetKey, displayBounds) {
+  const preset = SCREEN_PRESETS[presetKey] || SCREEN_PRESETS.native
+  const display = displayBounds
+    ? screen.getDisplayMatching(displayBounds)
+    : screen.getPrimaryDisplay()
+  const wa = display.workAreaSize
+  // Preserve preset aspect when clamping. Otherwise an ultrawide workArea
+  // gives 4K its full width but a clipped height; zoom = width/DESIGN_WIDTH
+  // then sets a CSS viewport that's too short for the 16:9 layout, and tiles
+  // squish vertically (chart shrinks, meta lines wrap).
+  const aspect = preset.w / preset.h
+  let width = Math.min(preset.w, wa.width)
+  let height = Math.min(preset.h, wa.height)
+  if (width / height > aspect) width = Math.round(height * aspect)
+  else height = Math.round(width / aspect)
+  return { width, height, zoom: width / DESIGN_WIDTH, workArea: display.workArea }
+}
 
 function createWindow() {
+  const storedPreset = store.get('ui.screenSize') || 'native'
+  const initial = resolveScreenSize(storedPreset)
+
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: initial.width,
+    height: initial.height,
     minWidth: 1024,
     minHeight: 640,
     backgroundColor: '#000000',
@@ -111,7 +201,61 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      zoomFactor: initial.zoom,
     },
+  })
+
+  // Lock down navigation: deny all window.open and external navigation. With
+  // contextIsolation already on, this is belt-and-suspenders against a future
+  // XSS or stray <a target="_blank">. External URLs route through the OS
+  // default browser via shell.openExternal.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url).catch(() => {})
+    }
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (VITE_DEV_SERVER_URL && url.startsWith(VITE_DEV_SERVER_URL)) return
+    if (url.startsWith('file://')) return
+    event.preventDefault()
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url).catch(() => {})
+    }
+  })
+
+  // Pause the 3s stats sweep while hidden/minimized — saves a non-trivial
+  // amount of CPU (top, ioreg, fsSize). On resume, immediately kick a fresh
+  // sweep so the dashboard isn't showing 3-second-stale data on first paint.
+  mainWindow.on('hide', () => { _renderActive = false })
+  mainWindow.on('minimize', () => { _renderActive = false })
+  mainWindow.on('show', () => {
+    if (!_renderActive) { _renderActive = true; sweepStats() }
+  })
+  mainWindow.on('restore', () => {
+    if (!_renderActive) { _renderActive = true; sweepStats() }
+  })
+
+  // Null out the reference so the `'second-instance'`, `win:close`, and
+  // settings-resize handlers don't try to focus/setBounds on a destroyed window.
+  mainWindow.on('closed', () => { mainWindow = null })
+
+  // Detect manual user resize → mark preset as 'custom' so the Settings UI
+  // doesn't show a stale highlighted button. Debounced so live drags don't
+  // spam the store. Suppressed during programmatic setBounds calls below.
+  let resizeTimer = null
+  mainWindow.on('resize', () => {
+    if (_suppressResizeListener) return
+    if (resizeTimer) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      const ui = store.get('ui') || {}
+      if (ui.screenSize !== 'custom') {
+        store.set('ui', { ...ui, screenSize: 'custom' })
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('ui:screen-size-changed', 'custom')
+        }
+      }
+    }, 200)
   })
 
   if (VITE_DEV_SERVER_URL) {
@@ -125,6 +269,29 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Default CSP — restricts scripts/styles to self, allows the few HTTPS hosts
+  // we actually fetch from (Open-Meteo, GitHub, Spotify, Google) and the Vite
+  // dev server. Blocks inline-eval and any third-party iframe load.
+  const csp = [
+    "default-src 'self'",
+    `script-src 'self'${VITE_DEV_SERVER_URL ? " 'unsafe-inline' 'unsafe-eval'" : ''}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https:",
+    "font-src 'self' data:",
+    "connect-src 'self' https: wss: ws://localhost:* http://localhost:*",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join('; ')
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [csp],
+      },
+    })
+  })
+
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -135,11 +302,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Ensure caffeinate is killed when the app exits so the Mac can sleep normally.
+// Release the keep-awake hold when the app exits so the system can sleep
+// normally. powerSaveBlocker.stop is a no-op if the ID is already released
+// or invalid, so this is safe to call unconditionally.
 app.on('before-quit', () => {
-  if (_caffeinateProc && !_caffeinateProc.killed) {
-    _caffeinateProc.kill()
-    _caffeinateProc = null
+  if (_powerSaveId != null) {
+    try { powerSaveBlocker.stop(_powerSaveId) } catch { /* ignore */ }
+    _powerSaveId = null
   }
 })
 
@@ -204,120 +373,297 @@ function normalizeSsid(raw) {
   return raw
 }
 
-async function sweepStats() {
+// Resolve to `fallback` after `ms` so a single hung systeminformation call
+// can't stall the whole sweep. (E.g. si.networkStats() can hang indefinitely
+// on Windows.) Failed calls also resolve to `fallback`.
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
+const SYSTEM_DRIVE = (process.env.SystemDrive || 'C:').toUpperCase()
+
+// ---------- Windows-specific stat helpers ----------
+//
+// systeminformation's Windows backend has two gaps:
+//   1. si.graphics() doesn't populate `utilizationGpu`.
+//   2. si.networkStats() hangs (5s+) regardless of interface argument.
+// nvidia-smi covers (1) for NVIDIA cards, and `netstat -e` covers (2) with
+// a manual delta calculation.
+
+async function getGpuStatsWindows() {
+  let percent = null
+  let model = null
+  let powerDrawW = null
+  let powerLimitW = null
+  let temperatureGpu = null
+  let utilizationMemory = null
+
+  // nvidia-smi: gives us utilization.gpu (which si.graphics() omits) plus
+  // power.draw/power.limit/temperature in one cheap call. Sub-second on
+  // machines with NVIDIA drivers; throws ENOENT otherwise.
   try {
-    // 1. CPU — si.currentLoad() uses `top` on macOS (~50 ms)
-    const [load, cpuInfo] = await Promise.all([si.currentLoad(), si.cpu()])
-    const cpu = {
-      percent: Math.round(load.currentLoad),
-      cores: load.cpus?.map((c) => Math.round(c.load)) ?? [],
-      speedGhz: cpuInfo.speed,
-      brand: `${cpuInfo.manufacturer} ${cpuInfo.brand}`,
+    const { stdout } = await execAsync(
+      'nvidia-smi --query-gpu=utilization.gpu,power.draw,power.limit,temperature.gpu,name --format=csv,noheader,nounits',
+      { timeout: 2000 },
+    )
+    const line = stdout.split('\n').find((l) => l.trim().length > 0) ?? ''
+    const parts = line.split(',').map((p) => p.trim())
+    if (parts.length >= 5) {
+      percent = Number(parts[0])
+      powerDrawW = Number(parts[1])
+      powerLimitW = Number(parts[2])
+      temperatureGpu = Number(parts[3])
+      model = parts[4]
     }
+  } catch { /* nvidia-smi unavailable — fall through */ }
 
-    // 2. GPU — ioreg on macOS (~100–300 ms); run in parallel with other calls
-    const gpuProm = (async () => {
-      if (process.platform === 'darwin') {
-        try {
-          const { stdout } = await execAsync('ioreg -rc IOAccelerator', { timeout: 2000 })
-          const match = stdout.match(/"Device Utilization %"=(\d+)/)
-          if (match) {
-            return {
-              percent: Math.max(0, Math.min(100, parseInt(match[1], 10))),
-              model: await getGpuModel(),
-            }
-          }
-        } catch { /* fall through */ }
+  // si.graphics() supplements with utilizationMemory and (sometimes) the
+  // same power/temp numbers — useful as a fallback when nvidia-smi is missing.
+  try {
+    const g = await si.graphics()
+    const ctrl =
+      g.controllers?.find((c) => c.vendor?.toLowerCase().includes('nvidia')) ??
+      g.controllers?.[0]
+    if (ctrl) {
+      if (model == null) model = ctrl.model || ctrl.name || 'GPU'
+      if (powerDrawW == null && typeof ctrl.powerDraw === 'number') powerDrawW = ctrl.powerDraw
+      if (powerLimitW == null && typeof ctrl.powerLimit === 'number') powerLimitW = ctrl.powerLimit
+      if (temperatureGpu == null && typeof ctrl.temperatureGpu === 'number') {
+        temperatureGpu = ctrl.temperatureGpu
       }
-      try {
-        const g = await si.graphics()
-        const ctrl =
-          g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ?? g.controllers?.[0]
-        return {
-          percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
-          model: ctrl?.model || ctrl?.name || 'GPU',
-        }
-      } catch { /* ignore */ }
-      return _statsCache?.gpu ?? { percent: 0, model: 'GPU' }
-    })()
-
-    // 3. Memory, Network, Battery — all cheap, run in parallel
-    const [mem, netStats, wifiList, ifaceInfo, bat, disks, gpu] = await Promise.all([
-      si.mem(),
-      si.networkStats(),
-      si.wifiConnections().catch(() => []),
-      si.networkInterfaces('default').catch(() => null),
-      si.battery(),
-      si.fsSize(),
-      gpuProm,
-    ])
-
-    // Memory
-    const memory = {
-      totalGB: Number((mem.total / 1e9).toFixed(1)),
-      usedGB: Number(((mem.total - mem.available) / 1e9).toFixed(1)),
-      swapGB: Number((mem.swapused / 1e9).toFixed(1)),
-      pct: Math.round(((mem.total - mem.available) / mem.total) * 100),
+      if (typeof ctrl.utilizationMemory === 'number') utilizationMemory = ctrl.utilizationMemory
     }
+  } catch { /* ignore */ }
 
-    // Network
-    const primary = netStats[0]
-    const wifiConn = wifiList.find((w) => w.iface === primary?.iface) ?? wifiList[0]
-    const iface = Array.isArray(ifaceInfo)
-      ? ifaceInfo.find((i) => i.iface === primary?.iface)
-      : ifaceInfo
-    const isWifi = !!wifiConn || iface?.type === 'wireless'
-    const network = primary
-      ? {
-          down: Math.max(0, primary.rx_sec ?? 0),
-          up: Math.max(0, primary.tx_sec ?? 0),
-          iface: primary.iface,
-          ssid: normalizeSsid(wifiConn?.ssid),
-          type: isWifi ? 'wifi' : 'wired',
-          ip: iface?.ip4 ?? null,
-          signalQuality: wifiConn?.quality ?? null,
-        }
-      : { down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null }
-
-    // Battery
-    const battery = {
-      hasBattery: bat.hasBattery,
-      percent: bat.percent,
-      isCharging: bat.isCharging,
-      acConnected: bat.acConnected,
-      timeRemaining: bat.timeRemaining ?? -1,
-    }
-
-    // Disk — keep only non-virtual mounts
-    const disk = disks
-      .filter((d) => !d.fs.startsWith('dev') && d.size > 0)
-      .map((d) => ({
-        fs: d.fs,
-        mount: d.mount,
-        totalGB: Number((d.size / 1e9).toFixed(1)),
-        usedGB: Number((d.used / 1e9).toFixed(1)),
-        freeGB: Number(((d.size - d.used) / 1e9).toFixed(1)),
-        pct: Math.round((d.used / d.size) * 100),
-      }))
-    const mainDisk = disk.find((d) => d.mount === '/') ?? disk[0] ?? null
-    const diskResult = mainDisk
-      ? {
-          totalGB: mainDisk.totalGB,
-          usedGB: mainDisk.usedGB,
-          freeGB: mainDisk.freeGB,
-          pct: mainDisk.pct,
-        }
-      : null
-
-    _statsCache = { cpu, gpu, memory, network, battery, disk: diskResult, fetchedAt: Date.now() }
-  } catch (err) {
-    console.error('[stats-sweep]', err.message)
+  return {
+    percent: percent != null ? Math.max(0, Math.min(100, Math.round(percent))) : 0,
+    model: model ?? 'GPU',
+    powerDrawW,
+    powerLimitW,
+    temperatureGpu,
+    utilizationMemory,
   }
 }
 
-// Prime the cache immediately then sweep on schedule
+// Cross-sweep state for Windows network rate calculation. `netstat -e` returns
+// cumulative byte counters; we need two samples to compute a rate.
+let _lastNetSample = null
+
+async function getNetStatsWindows() {
+  const fallback =
+    _statsCache?.network ??
+    { down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null, signalQuality: null }
+  try {
+    const { stdout } = await execAsync('netstat -e', { timeout: 2000 })
+    const m = stdout.match(/Bytes\s+(\d+)\s+(\d+)/)
+    if (!m) return fallback
+    const rxBytes = Number(m[1])
+    const txBytes = Number(m[2])
+    const now = Date.now()
+    const last = _lastNetSample
+    _lastNetSample = { rxBytes, txBytes, t: now }
+    let down = 0
+    let up = 0
+    if (last && now > last.t) {
+      const elapsed = (now - last.t) / 1000
+      down = Math.max(0, (rxBytes - last.rxBytes) / elapsed)
+      up = Math.max(0, (txBytes - last.txBytes) / elapsed)
+    }
+    let iface = 'net'
+    let ip = null
+    let type = 'unknown'
+    try {
+      const i = await si.networkInterfaces('default')
+      const def = Array.isArray(i) ? i.find((x) => x.default) ?? i[0] : i
+      if (def) {
+        iface = def.iface
+        ip = def.ip4 ?? null
+        type = def.type === 'wireless' ? 'wifi' : 'wired'
+      }
+    } catch { /* ignore */ }
+    return { down, up, iface, ssid: null, type, ip, signalQuality: null }
+  } catch {
+    return fallback
+  }
+}
+
+// Memoize the in-flight sweep so two cold-start callers don't each kick off
+// a fresh fan-out of subprocess calls (top, ioreg, nvidia-smi, etc.). Both
+// callers wait on the same promise.
+let _inFlightSweep = null
+async function sweepStats() {
+  if (_inFlightSweep) return _inFlightSweep
+  _inFlightSweep = _doSweep().finally(() => { _inFlightSweep = null })
+  return _inFlightSweep
+}
+
+async function _doSweep() {
+  // Each si.*() call gets its own timeout + fallback so one slow call can't
+  // poison the whole sweep. Last-known-good values come from _statsCache.
+  const prev = _statsCache
+  const isWin = process.platform === 'win32'
+
+  // 1. CPU — cross-platform via systeminformation
+  const [load, cpuInfo] = await Promise.all([
+    withTimeout(si.currentLoad(), 2500, null),
+    withTimeout(si.cpu(), 2500, null),
+  ])
+  const cpu = load
+    ? {
+        percent: Math.round(load.currentLoad),
+        cores: load.cpus?.map((c) => Math.round(c.load)) ?? [],
+        speedGhz: cpuInfo?.speed ?? prev?.cpu?.speedGhz ?? 0,
+        brand: cpuInfo
+          ? `${cpuInfo.manufacturer} ${cpuInfo.brand}`
+          : (prev?.cpu?.brand ?? ''),
+      }
+    : (prev?.cpu ?? { percent: 0, cores: [], speedGhz: 0, brand: '' })
+
+  // 2. GPU — Windows uses nvidia-smi + si.graphics() (utilizationGpu missing
+  // from si on Windows); macOS uses ioreg; everything else falls back to si.
+  const gpuProm = isWin
+    ? getGpuStatsWindows()
+    : (async () => {
+        if (process.platform === 'darwin') {
+          try {
+            const { stdout } = await execAsync('ioreg -rc IOAccelerator', { timeout: 2000 })
+            const match = stdout.match(/"Device Utilization %"=(\d+)/)
+            if (match) {
+              return {
+                percent: Math.max(0, Math.min(100, parseInt(match[1], 10))),
+                model: await getGpuModel(),
+              }
+            }
+          } catch { /* fall through */ }
+        }
+        try {
+          const g = await si.graphics()
+          const ctrl =
+            g.controllers?.find((c) => typeof c.utilizationGpu === 'number') ?? g.controllers?.[0]
+          return {
+            percent: Math.max(0, Math.min(100, Math.round(ctrl?.utilizationGpu ?? 0))),
+            model: ctrl?.model || ctrl?.name || 'GPU',
+          }
+        } catch { /* ignore */ }
+        return prev?.gpu ?? { percent: 0, model: 'GPU' }
+      })()
+
+  // 3. Network — Windows uses `netstat -e` with a delta calc (si.networkStats
+  // hangs on Windows). macOS keeps the existing si-based path.
+  const netProm = isWin
+    ? getNetStatsWindows()
+    : (async () => {
+        const [netStats, wifiList, ifaceInfo] = await Promise.all([
+          withTimeout(si.networkStats(), 2000, []),
+          withTimeout(si.wifiConnections(), 2000, []),
+          withTimeout(si.networkInterfaces('default'), 2000, null),
+        ])
+        const primary = Array.isArray(netStats) ? netStats[0] : null
+        const wifiConn =
+          (Array.isArray(wifiList) &&
+            (wifiList.find((w) => w.iface === primary?.iface) ?? wifiList[0])) ||
+          null
+        const iface = Array.isArray(ifaceInfo)
+          ? ifaceInfo.find((i) => i.iface === primary?.iface)
+          : ifaceInfo
+        const isWifi = !!wifiConn || iface?.type === 'wireless'
+        return primary
+          ? {
+              down: Math.max(0, primary.rx_sec ?? 0),
+              up: Math.max(0, primary.tx_sec ?? 0),
+              iface: primary.iface,
+              ssid: normalizeSsid(wifiConn?.ssid),
+              type: isWifi ? 'wifi' : 'wired',
+              ip: iface?.ip4 ?? null,
+              signalQuality: wifiConn?.quality ?? null,
+            }
+          : (prev?.network ?? {
+              down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null,
+            })
+      })()
+
+  // 4. Memory, Battery, Disk — cross-platform via systeminformation
+  const [mem, bat, disks, gpu, network] = await Promise.all([
+    withTimeout(si.mem(), 2000, null),
+    withTimeout(si.battery(), 2000, null),
+    withTimeout(si.fsSize(), 2500, []),
+    withTimeout(gpuProm, 3000, prev?.gpu ?? { percent: 0, model: 'GPU' }),
+    withTimeout(netProm, 3000, prev?.network ?? {
+      down: 0, up: 0, iface: 'n/a', ssid: null, type: 'unknown', ip: null,
+    }),
+  ])
+
+  // Memory
+  const memory = mem
+    ? {
+        totalGB: Number((mem.total / 1e9).toFixed(1)),
+        usedGB: Number(((mem.total - mem.available) / 1e9).toFixed(1)),
+        swapGB: Number((mem.swapused / 1e9).toFixed(1)),
+        pct: Math.round(((mem.total - mem.available) / mem.total) * 100),
+      }
+    : (prev?.memory ?? { totalGB: 0, usedGB: 0, swapGB: 0, pct: 0 })
+
+  // Battery — on a desktop with no battery, surface GPU power-draw fields so
+  // the BatteryTile can render a "POWER" view instead of a useless "AC ONLY".
+  const batteryBase = bat
+    ? {
+        hasBattery: bat.hasBattery,
+        percent: bat.percent,
+        isCharging: bat.isCharging,
+        acConnected: bat.acConnected,
+        timeRemaining: bat.timeRemaining ?? -1,
+      }
+    : (prev?.battery ?? {
+        hasBattery: false,
+        percent: 0,
+        isCharging: false,
+        acConnected: true,
+        timeRemaining: -1,
+      })
+  const battery =
+    !batteryBase.hasBattery && gpu?.powerDrawW != null && gpu?.powerLimitW
+      ? { ...batteryBase, powerDrawW: gpu.powerDrawW, powerLimitW: gpu.powerLimitW }
+      : batteryBase
+
+  // Disk — keep only non-virtual mounts
+  const diskList = (disks ?? [])
+    .filter((d) => !d.fs.startsWith('dev') && d.size > 0)
+    .map((d) => ({
+      fs: d.fs,
+      mount: d.mount,
+      totalGB: Number((d.size / 1e9).toFixed(1)),
+      usedGB: Number((d.used / 1e9).toFixed(1)),
+      freeGB: Number(((d.size - d.used) / 1e9).toFixed(1)),
+      pct: Math.round((d.used / d.size) * 100),
+    }))
+  // Pick the system drive: '/' on Unix, the SystemDrive (e.g. 'C:') on Windows.
+  const mainDisk =
+    diskList.find((d) => d.mount === '/' || d.mount?.toUpperCase() === SYSTEM_DRIVE) ??
+    diskList[0] ??
+    null
+  const diskResult = mainDisk
+    ? {
+        totalGB: mainDisk.totalGB,
+        usedGB: mainDisk.usedGB,
+        freeGB: mainDisk.freeGB,
+        pct: mainDisk.pct,
+      }
+    : (prev?.disk ?? null)
+
+  _statsCache = { cpu, gpu, memory, network, battery, disk: diskResult, fetchedAt: Date.now() }
+}
+
+// Prime the cache immediately then sweep on schedule. The interval skips when
+// the window is hidden/minimized — see the `hide`/`minimize` listeners on
+// mainWindow. Cold getStats() callers can still trigger a sweep on demand.
 sweepStats()
-setInterval(sweepStats, STATS_INTERVAL_MS)
+setInterval(() => {
+  if (!_renderActive) return
+  sweepStats()
+}, STATS_INTERVAL_MS)
 
 /** Return cached stats, doing a blocking fetch if cache is cold. */
 async function getStats(key) {
@@ -350,10 +696,18 @@ ipcMain.handle('sys:uptime', async () => {
   return { uptime: t.uptime } // seconds since boot — cheap, not cached
 })
 
-// Fire-and-forget: plays a macOS system sound. No-op on Windows.
+// Fire-and-forget: plays a system "ding" sound when the Pomodoro timer ends.
+// macOS plays one of the named system sounds (Glass, Hero, etc.); Windows
+// plays a built-in notification WAV via PowerShell's SoundPlayer.
 ipcMain.handle('sys:play-sound', (_event, sound = 'Glass') => {
   if (process.platform === 'darwin') {
     exec(`afplay "/System/Library/Sounds/${sound}.aiff"`)
+  } else if (process.platform === 'win32') {
+    // Windows ships several .wav files in C:\Windows\Media. Alarm04 is a
+    // bright two-tone chime that's a reasonable analogue to macOS Glass.
+    exec(
+      `powershell -NoProfile -Command "(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Alarm04.wav').PlaySync()"`,
+    )
   }
 })
 
@@ -487,7 +841,7 @@ ipcMain.handle('sys:weather', async () => {
       `?latitude=${lat}&longitude=${lon}` +
       `&current=temperature_2m,weathercode,windspeed_10m,winddirection_10m,relativehumidity_2m` +
       `&temperature_unit=fahrenheit&windspeed_unit=mph&wind_speed_unit=mph`
-    const res = await fetch(url)
+    const res = await fetchWithTimeout(url)
     const json = await res.json()
     const c = json.current
     _weatherCache = {
@@ -510,14 +864,43 @@ ipcMain.handle('sys:weather', async () => {
 
 ipcMain.handle('settings:get', () => ({
   weather: store.get('weather'),
-  github: store.get('github'),
-  // Privacy: only return a boolean, never the token itself.
-  spotify: { connected: !!store.get('spotify.refreshToken') },
+  // Privacy: never return the access token to the renderer. The Settings UI
+  // only needs the client_id (so it can show "Configured ✓" vs "Not configured")
+  // and the manual username override.
+  github: {
+    clientId: store.get('github.clientId') || '',
+    username: store.get('github.username') || '',
+  },
+  spotify: {
+    clientId: store.get('spotify.clientId') || '',
+    connected: !!store.get('spotify.refreshToken'),
+  },
   ui: store.get('ui'),
 }))
 
 ipcMain.handle('settings:set', (_event, key, value) => {
-  store.set(key, value)
+  // Reject anything not in the allowlist. Without this, a renderer-side XSS
+  // could write to spotify.refreshToken / github.accessToken / __proto__ and
+  // either escalate privileges or corrupt the schema.
+  if (typeof key !== 'string' || !SETTINGS_ALLOWED_KEYS.has(key)) {
+    console.warn('[settings:set] rejected key:', key)
+    return false
+  }
+
+  // For object-shaped sections (ui, weather, github, calendar) merge with the
+  // current value rather than replacing — otherwise a partial update like
+  // `{ textScale }` would clobber sibling keys like `screenSize`.
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const current = store.get(key)
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+      store.set(key, { ...current, ...value })
+    } else {
+      store.set(key, value)
+    }
+  } else {
+    store.set(key, value)
+  }
+
   // Invalidate relevant caches so the next poll picks up new values
   if (key.startsWith('weather')) {
     _weatherCache = null
@@ -527,6 +910,28 @@ ipcMain.handle('settings:set', (_event, key, value) => {
     _heatmapCache = null
     _heatmapFetchedAt = 0
   }
+
+  // Apply screen-size preset: resize the window, recenter on the current
+  // display, and push the new zoom factor to the renderer.
+  if (key === 'ui' && value && typeof value === 'object' && 'screenSize' in value) {
+    const newPreset = value.screenSize
+    if (newPreset && newPreset !== 'custom' && mainWindow && !mainWindow.isDestroyed()) {
+      const bounds = mainWindow.getBounds()
+      const resolved = resolveScreenSize(newPreset, bounds)
+      const wa = resolved.workArea
+      const x = Math.round(wa.x + (wa.width - resolved.width) / 2)
+      const y = Math.round(wa.y + (wa.height - resolved.height) / 2)
+      _suppressResizeListener = true
+      mainWindow.setBounds({ x, y, width: resolved.width, height: resolved.height })
+      // Re-enable the resize listener after the OS has finished animating.
+      setTimeout(() => {
+        _suppressResizeListener = false
+      }, 400)
+      mainWindow.webContents.send('ui:zoom-changed', resolved.zoom)
+      mainWindow.webContents.send('ui:screen-size-changed', newPreset)
+    }
+  }
+
   return true
 })
 
@@ -535,7 +940,7 @@ ipcMain.handle('settings:geocode', async (_event, query) => {
     const url =
       `https://geocoding-api.open-meteo.com/v1/search` +
       `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
-    const res = await fetch(url)
+    const res = await fetchWithTimeout(url)
     const json = await res.json()
     const r = json.results?.[0]
     if (!r) return null
@@ -604,7 +1009,7 @@ ipcMain.handle('sys:github-heatmap', async () => {
 
     if (!token || !login) return null
 
-    const res = await fetch('https://api.github.com/graphql', {
+    const res = await fetchWithTimeout('https://api.github.com/graphql', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -634,12 +1039,13 @@ ipcMain.handle('sys:github-heatmap', async () => {
 
 // ---------- Spotify ----------
 //
-// Auth flow: bundled-credential OAuth Authorization Code.
+// Auth flow: OAuth 2.0 Authorization Code with PKCE (no client_secret).
 // The user clicks Connect → main opens a minimal BrowserWindow pointed at the
-// Spotify authorize URL → user approves in that window → Spotify issues a
-// redirect to bento://callback?code=...&state=... → Electron's will-redirect /
-// will-navigate events intercept the bento:// URL before the OS ever sees it →
-// handleSpotifyCallback exchanges the code for tokens → window closes.
+// Spotify authorize URL with a code_challenge → user approves in that window
+// → Spotify issues a redirect to bento://callback?code=...&state=... →
+// Electron's will-redirect / will-navigate events intercept the bento:// URL
+// before the OS ever sees it → handleSpotifyCallback exchanges the code (with
+// the matching code_verifier) for tokens → window closes.
 //
 // Using an in-app window (rather than shell.openExternal + OS protocol routing)
 // is reliable in both dev and production: no Info.plist registration required,
@@ -649,21 +1055,34 @@ ipcMain.handle('sys:github-heatmap', async () => {
 // + display name + everything else stays in main-process memory or is never
 // requested at all. See store defaults at the top of this file.
 
-const SPOTIFY_BASIC_AUTH = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString(
-  'base64'
-)
-
 const SPOTIFY_SCOPE = 'user-read-currently-playing user-read-playback-state'
 const CONNECT_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes — abandon if user wanders off
 
+// PKCE: client generates a random verifier, sends sha256(verifier) as the
+// challenge in the authorize request, and proves possession by sending the
+// raw verifier back in the token exchange. No client_secret needed.
+function generateCodeVerifier() {
+  // 64 random bytes → ~86 base64url chars, well within the 43–128 spec range.
+  return crypto.randomBytes(64).toString('base64url')
+}
+
+function computeCodeChallenge(verifier) {
+  return crypto.createHash('sha256').update(verifier).digest('base64url')
+}
+
+// Token exchange (both authorization_code and refresh_token grants). PKCE
+// requires client_id in the body and forbids Basic auth, so callers pass
+// code_verifier (for code grant) or just refresh_token (for refresh). The
+// client_id is read from the store at call time so the user's runtime-
+// configured value is always used (not a stale snapshot from app startup).
 async function exchangeSpotifyToken(params) {
-  const res = await fetch('https://accounts.spotify.com/api/token', {
+  const clientId = getSpotifyClientId()
+  if (!clientId) throw new Error('Spotify OAuth not configured')
+  const body = new URLSearchParams({ ...params, client_id: clientId })
+  const res = await fetchWithTimeout('https://accounts.spotify.com/api/token', {
     method: 'POST',
-    headers: {
-      Authorization: `Basic ${SPOTIFY_BASIC_AUTH}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams(params).toString(),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -754,6 +1173,7 @@ async function handleSpotifyCallback(url) {
       grant_type: 'authorization_code',
       code,
       redirect_uri: SPOTIFY_REDIRECT_URI,
+      code_verifier: _pendingConnect.codeVerifier,
     })
     // Persist ONLY the refresh token. Access token + expiry stay in memory.
     store.set('spotify.refreshToken', payload.refresh_token)
@@ -770,30 +1190,53 @@ async function handleSpotifyCallback(url) {
 }
 
 ipcMain.handle('spotify:connect', async () => {
-  if (_pendingConnect) {
-    return { ok: false, error: 'Connect already in progress' }
+  // Refuse to start if the client_id isn't set — opening the auth window with
+  // a placeholder just shows a Spotify error page with no redirect, which
+  // wedges the UI until the user finds and closes the orphaned window.
+  const clientId = getSpotifyClientId()
+  if (!clientId) {
+    return {
+      ok: false,
+      error: 'Spotify OAuth not configured. Open Settings → Spotify → OAuth App to add your client ID.',
+    }
   }
 
+  // Supersede any orphaned in-flight connect (e.g. from a previous attempt
+  // where the auth window got hidden and the user reopened Settings).
+  if (_pendingConnect?.cancel) _pendingConnect.cancel(new Error('Superseded'))
+
+  const codeVerifier = generateCodeVerifier()
+  const codeChallenge = computeCodeChallenge(codeVerifier)
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL('https://accounts.spotify.com/authorize')
   authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('client_id', SPOTIFY_CLIENT_ID)
+  authUrl.searchParams.set('client_id', clientId)
   authUrl.searchParams.set('redirect_uri', SPOTIFY_REDIRECT_URI)
   authUrl.searchParams.set('scope', SPOTIFY_SCOPE)
   authUrl.searchParams.set('state', state)
+  authUrl.searchParams.set('code_challenge', codeChallenge)
+  authUrl.searchParams.set('code_challenge_method', 'S256')
   authUrl.searchParams.set('show_dialog', 'true')
 
   return new Promise((resolve, reject) => {
     // Open a dedicated auth window so Electron intercepts the bento:// redirect
     // directly via will-redirect / will-navigate — no OS protocol routing needed.
+    // parent: mainWindow keeps the auth window above main on Windows so it
+    // can't get hidden behind and orphaned.
     const authWin = new BrowserWindow({
       width: 480,
       height: 700,
       title: 'Connect Spotify',
+      parent: mainWindow ?? undefined,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
+        // Isolate the auth session from the main app's session so that any
+        // cookies or service workers from accounts.spotify.com don't leak
+        // into the dashboard's webview. `persist:` keeps the user signed in
+        // between Connect clicks for convenience.
+        session: session.fromPartition('persist:oauth-spotify'),
       },
     })
 
@@ -807,7 +1250,7 @@ ipcMain.handle('spotify:connect', async () => {
       cleanup(new Error('Connect timed out — window closed?'))
     }, CONNECT_TIMEOUT_MS)
 
-    _pendingConnect = { resolve, reject, state, timeoutId }
+    _pendingConnect = { resolve, reject, state, timeoutId, cancel: cleanup, codeVerifier }
 
     // Intercept the bento:// redirect before the webview tries to navigate to it.
     const interceptRedirect = (_event, url) => {
@@ -831,6 +1274,13 @@ ipcMain.handle('spotify:connect', async () => {
   )
 })
 
+ipcMain.handle('spotify:connect-cancel', () => {
+  if (_pendingConnect?.cancel) {
+    _pendingConnect.cancel(new Error('Cancelled'))
+  }
+  return { ok: true }
+})
+
 ipcMain.handle('spotify:disconnect', () => {
   store.set('spotify.refreshToken', null)
   _spotifyAccess = null
@@ -852,7 +1302,7 @@ ipcMain.handle('sys:now-playing', async () => {
 
   let res
   try {
-    res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+    res = await fetchWithTimeout('https://api.spotify.com/v1/me/player/currently-playing', {
       headers: { Authorization: `Bearer ${token}` },
     })
   } catch (err) {
@@ -892,27 +1342,138 @@ ipcMain.handle('sys:now-playing', async () => {
 // and we validate it once by hitting api.github.com/user to resolve the login.
 // Token is stored in electron-store; no rebuild or OAuth App required.
 
-ipcMain.handle('github:connect', async (_event, pat) => {
-  if (!pat || typeof pat !== 'string' || !pat.trim()) {
-    return { ok: false, error: 'No token provided' }
+// GitHub OAuth Device Flow — same UX as `gh auth login -w`. The user clicks
+// Sign In, the OS browser opens to github.com/login/device with the user code
+// pre-filled, they click Authorize, and we poll until GitHub gives us an
+// access token. No client_secret, no callback URL, identical on Mac/Windows.
+
+ipcMain.handle('github:connect-start', async () => {
+  // Cancel any in-flight flow before starting a new one
+  if (_githubDeviceFlow) {
+    if (_githubDeviceFlow.timerId) clearTimeout(_githubDeviceFlow.timerId)
+    _githubDeviceFlow.abort = true
+    _githubDeviceFlow = null
   }
-  const token = pat.trim()
+
+  const clientId = getGithubClientId()
+  if (!clientId) {
+    return {
+      ok: false,
+      error: 'GitHub OAuth not configured. Open Settings → GitHub → OAuth App to add your client ID.',
+    }
+  }
+
+  let codeData
   try {
-    const res = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    const res = await fetchWithTimeout('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
     })
-    if (res.status === 401) return { ok: false, error: 'Token invalid or expired' }
-    if (!res.ok) return { ok: false, error: `GitHub API error: ${res.status}` }
-    const user = await res.json()
-    const login = user.login || ''
-    store.set('github.accessToken', token)
-    store.set('github.login', login)
-    _heatmapCache = null
-    _heatmapFetchedAt = 0
-    return { ok: true, login }
+    if (!res.ok) return { ok: false, error: `GitHub responded ${res.status}` }
+    codeData = await res.json()
   } catch (err) {
     return { ok: false, error: err.message }
   }
+
+  const { device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval } = codeData
+  if (!device_code || !user_code) {
+    return { ok: false, error: 'GitHub did not return device flow fields' }
+  }
+
+  const fullUri = verification_uri_complete || verification_uri || 'https://github.com/login/device'
+  const expiresAt = Date.now() + (expires_in || 900) * 1000
+
+  // Auto-open the OS browser. If this fails (e.g. no default browser set) the
+  // user can still copy the URL from the renderer's "Reopen" button.
+  shell.openExternal(fullUri).catch(() => {})
+
+  const flow = { deviceCode: device_code, abort: false, timerId: null }
+  _githubDeviceFlow = flow
+  let pollIntervalMs = (interval || 5) * 1000
+
+  const poll = async () => {
+    if (flow.abort) return
+    if (Date.now() > expiresAt) {
+      _githubDeviceFlow = null
+      mainWindow?.webContents.send('github:auth-result', { ok: false, error: 'Code expired' })
+      return
+    }
+    try {
+      const res = await fetchWithTimeout('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: clientId,
+          device_code,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      })
+      const data = await res.json()
+
+      if (data.access_token) {
+        let login = ''
+        try {
+          const ur = await fetchWithTimeout('https://api.github.com/user', {
+            headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/vnd.github+json' },
+          })
+          if (ur.ok) login = (await ur.json()).login || ''
+        } catch { /* token still valid even if /user lookup fails */ }
+        store.set('github.accessToken', data.access_token)
+        store.set('github.login', login)
+        _heatmapCache = null
+        _heatmapFetchedAt = 0
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', { ok: true, login })
+        return
+      }
+
+      // Per spec: authorization_pending → keep polling; slow_down → +5s; everything else → fail
+      if (data.error === 'authorization_pending') {
+        // no-op, keep polling at current interval
+      } else if (data.error === 'slow_down') {
+        pollIntervalMs += 5000
+      } else if (data.error === 'expired_token') {
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', { ok: false, error: 'Code expired' })
+        return
+      } else if (data.error === 'access_denied') {
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', { ok: false, error: 'Authorization denied' })
+        return
+      } else if (data.error) {
+        _githubDeviceFlow = null
+        mainWindow?.webContents.send('github:auth-result', {
+          ok: false,
+          error: data.error_description || data.error,
+        })
+        return
+      }
+    } catch { /* transient network error — keep polling */ }
+
+    if (!flow.abort) flow.timerId = setTimeout(poll, pollIntervalMs)
+  }
+
+  flow.timerId = setTimeout(poll, pollIntervalMs)
+  return { ok: true, userCode: user_code, verificationUri: fullUri, expiresAt }
+})
+
+ipcMain.handle('github:connect-cancel', () => {
+  if (_githubDeviceFlow) {
+    if (_githubDeviceFlow.timerId) clearTimeout(_githubDeviceFlow.timerId)
+    _githubDeviceFlow.abort = true
+    _githubDeviceFlow = null
+  }
+  return { ok: true }
+})
+
+// Open a github.com URL in the user's default browser — used by the renderer
+// to "reopen" the device-flow verification page if they accidentally close it.
+ipcMain.handle('app:open-external', (_event, url) => {
+  if (typeof url !== 'string') return { ok: false }
+  if (!/^https:\/\/github\.com\//i.test(url)) return { ok: false, error: 'Only github.com URLs allowed' }
+  shell.openExternal(url).catch(() => {})
+  return { ok: true }
 })
 
 ipcMain.handle('github:disconnect', () => {
@@ -955,7 +1516,7 @@ function clearPendingGCalConnect() {
 }
 
 async function exchangeGoogleToken(params) {
-  const res = await fetch(GOOGLE_TOKEN_URL, {
+  const res = await fetchWithTimeout(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -1076,7 +1637,18 @@ ipcMain.handle('calendar:connect-icloud', async (_event, username, appPassword) 
 })
 
 ipcMain.handle('calendar:connect-google', async () => {
-  if (_pendingGCalConnect) return { ok: false, error: 'Connect already in progress' }
+  // Refuse to start with placeholder credentials — same wedge as Spotify
+  // (Google's invalid_client page doesn't redirect, so the orphan auth window
+  // strands the renderer's "WAITING FOR BROWSER…" state).
+  if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.startsWith('paste-')) {
+    return { ok: false, error: 'Google not configured — set credentials in electron/google-calendar-config.js' }
+  }
+  if (!GOOGLE_CLIENT_SECRET || GOOGLE_CLIENT_SECRET.startsWith('paste-')) {
+    return { ok: false, error: 'Google not configured — set credentials in electron/google-calendar-config.js' }
+  }
+
+  // Supersede any orphaned in-flight connect.
+  if (_pendingGCalConnect?.cancel) _pendingGCalConnect.cancel(new Error('Superseded'))
 
   const state = crypto.randomBytes(16).toString('hex')
   const authUrl = new URL(GOOGLE_AUTH_URL)
@@ -1093,7 +1665,13 @@ ipcMain.handle('calendar:connect-google', async () => {
       width: 480,
       height: 700,
       title: 'Connect Google Calendar',
-      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+      parent: mainWindow ?? undefined,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        session: session.fromPartition('persist:oauth-google'),
+      },
     })
 
     const cleanup = (err) => {
@@ -1109,7 +1687,7 @@ ipcMain.handle('calendar:connect-google', async () => {
       5 * 60 * 1000
     )
 
-    _pendingGCalConnect = { resolve, reject, state, timeoutId }
+    _pendingGCalConnect = { resolve, reject, state, timeoutId, cancel: cleanup }
 
     const intercept = async (event, url) => {
       if (!url.startsWith(GOOGLE_REDIRECT_URI)) return
@@ -1131,7 +1709,7 @@ ipcMain.handle('calendar:connect-google', async () => {
         })
 
         // Get the email needed to construct the CalDAV URL
-        const userinfoRes = await fetch(GOOGLE_USERINFO, {
+        const userinfoRes = await fetchWithTimeout(GOOGLE_USERINFO, {
           headers: { Authorization: `Bearer ${tokenPayload.access_token}` },
         })
         if (!userinfoRes.ok) throw new Error('Could not fetch Google account email')
@@ -1172,6 +1750,13 @@ ipcMain.handle('calendar:connect-google', async () => {
 
     authWin.loadURL(authUrl.toString())
   })
+})
+
+ipcMain.handle('calendar:connect-google-cancel', () => {
+  if (_pendingGCalConnect?.cancel) {
+    _pendingGCalConnect.cancel(new Error('Cancelled'))
+  }
+  return { ok: true }
 })
 
 ipcMain.handle('calendar:get-calendars', async () => {
@@ -1320,9 +1905,129 @@ ipcMain.handle('sys:calendar-next-event', async () => {
 //  QUICK SETTINGS — WiFi, Bluetooth, Caffeinate, Focus
 // ============================================================
 
+// ---------- Windows Wi-Fi helpers ----------
+//
+// `netsh wlan show interfaces` is unreliable on some Windows configs; we use
+// `netsh interface show interface` (always works) for adapter state and
+// Get-NetConnectionProfile for the connected SSID.
+// Toggling requires admin — try direct first, fall back to UAC elevation.
+
+async function getWifiStatusWindows() {
+  try {
+    const { stdout } = await execAsync('netsh interface show interface', { timeout: 2000 })
+    // Find the line for the Wi-Fi adapter (case-insensitive name match)
+    const adapterLine = stdout.split('\n').find(
+      (l) => l.toLowerCase().includes('wi-fi') || l.toLowerCase().includes('wireless'),
+    )
+    if (!adapterLine) return { on: false, ssid: '' }
+
+    const isDisabled = adapterLine.toLowerCase().includes('disabled')
+    if (isDisabled) return { on: false, ssid: '' }
+
+    // Extract interface name — everything after the Type column (Dedicated/etc.)
+    const nameMatch = adapterLine.match(/(?:Dedicated|Loopback|PPP)\s+(\S[\s\S]+?)\s*$/)
+    const adapterName = nameMatch ? nameMatch[1].trim() : null
+    if (adapterName && !_wifiAdapterName) _wifiAdapterName = adapterName
+
+    const isConnected = adapterLine.toLowerCase().includes(' connected')
+    if (!isConnected) return { on: true, ssid: '' }
+
+    // SSID from the connection profile
+    const name = _wifiAdapterName
+    if (!name) return { on: true, ssid: '' }
+    try {
+      const { stdout: p } = await execAsync(
+        `powershell -NoProfile -Command "(Get-NetConnectionProfile -InterfaceAlias '${name}' -ErrorAction SilentlyContinue).Name"`,
+        { timeout: 2000 },
+      )
+      return { on: true, ssid: p.trim() || '' }
+    } catch {
+      return { on: true, ssid: '' }
+    }
+  } catch {
+    return { on: false, ssid: '' }
+  }
+}
+
+async function toggleWifiWindows(on) {
+  // Ensure we have the adapter name (status populates _wifiAdapterName as a side-effect)
+  if (!_wifiAdapterName) await getWifiStatusWindows()
+  const adapter = _wifiAdapterName
+  if (!adapter) return { ok: false, error: 'No Wi-Fi adapter found' }
+  const action = on ? 'enable' : 'disable'
+  // Try without elevation (succeeds if process already has admin rights)
+  try {
+    await execAsync(`netsh interface set interface "${adapter}" ${action}`, { timeout: 5000 })
+    return { ok: true }
+  } catch { /* needs elevation */ }
+  // Elevate via UAC — user sees a Windows admin-consent dialog
+  try {
+    await execAsync(
+      `powershell -NoProfile -Command "Start-Process netsh -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList 'interface set interface ""${adapter}"" ${action}'"`,
+      { timeout: 30000 },
+    )
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Toggle failed' }
+  }
+}
+
+// ---------- Windows Bluetooth helpers ----------
+//
+// The WinRT Radio API requires UWP capability declarations that Electron
+// doesn't have, so we use Get-PnpDevice / Enable|Disable-PnpDevice instead.
+// The USB-based host controller (VID 8087 for Intel, etc.) represents the
+// radio; its Status 'OK' means the radio is active.
+
+async function getBtStatusWindows() {
+  try {
+    const { stdout } = await execAsync(
+      `powershell -NoProfile -Command "Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB*' } | Select-Object -First 1 -ExpandProperty Status"`,
+      { timeout: 3000 },
+    )
+    const status = stdout.trim()
+    return { on: status === 'OK', available: status.length > 0 }
+  } catch {
+    return { on: false, available: false }
+  }
+}
+
+async function toggleBtWindows(on) {
+  try {
+    const { stdout: idOut } = await execAsync(
+      `powershell -NoProfile -Command "Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB*' } | Select-Object -First 1 -ExpandProperty InstanceId"`,
+      { timeout: 3000 },
+    )
+    const instanceId = idOut.trim()
+    if (!instanceId) return { ok: false, error: 'Bluetooth adapter not found' }
+    const action = on ? 'Enable-PnpDevice' : 'Disable-PnpDevice'
+    // Write a temp ps1 to avoid quoting InstanceId (which contains & and \)
+    const scriptPath = path.join(app.getPath('temp'), 'bento-bt-toggle.ps1')
+    await fs.promises.writeFile(scriptPath, `${action} -InstanceId '${instanceId}' -Confirm:$false`)
+    // Try without elevation first
+    try {
+      await execAsync(
+        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`,
+        { timeout: 10000 },
+      )
+      return { ok: true }
+    } catch { /* needs elevation */ }
+    // Elevate via UAC
+    const escapedPath = scriptPath.replace(/\\/g, '\\\\')
+    await execAsync(
+      `powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""${escapedPath}"""`,
+      { timeout: 30000 },
+    )
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Toggle failed' }
+  }
+}
+
 // ---------- WiFi ----------
 
 ipcMain.handle('sys:wifi-status', async () => {
+  if (process.platform === 'win32') return getWifiStatusWindows()
   try {
     const { stdout } = await execAsync('networksetup -getairportpower en0', { timeout: 3000 })
     const on = stdout.includes(': On')
@@ -1339,6 +2044,7 @@ ipcMain.handle('sys:wifi-status', async () => {
 })
 
 ipcMain.handle('sys:wifi-toggle', async (_event, on) => {
+  if (process.platform === 'win32') return toggleWifiWindows(on)
   const subcmd = `networksetup -setairportpower en0 ${on ? 'on' : 'off'}`
   try {
     await execAsync(`osascript -e 'do shell script "${subcmd}" with administrator privileges'`, {
@@ -1449,6 +2155,7 @@ async function runBTHelper(cmd) {
 }
 
 ipcMain.handle('sys:bluetooth-status', async () => {
+  if (process.platform === 'win32') return getBtStatusWindows()
   try {
     const out = await runBTHelper('status')
     if (out === 'on' || out === 'off') return { on: out === 'on', available: true }
@@ -1466,6 +2173,7 @@ ipcMain.handle('sys:bluetooth-status', async () => {
 })
 
 ipcMain.handle('sys:bluetooth-toggle', async (_event, on) => {
+  if (process.platform === 'win32') return toggleBtWindows(on)
   try {
     await runBTHelper(on ? 'on' : 'off')
     return { ok: true }
@@ -1475,36 +2183,25 @@ ipcMain.handle('sys:bluetooth-toggle', async (_event, on) => {
   }
 })
 
-// ---------- Caffeinate ----------
+// ---------- Caffeinate (keep display awake) ----------
+// Uses Electron's built-in powerSaveBlocker, which wraps:
+//   macOS:   IOPMAssertionCreateWithName(kIOPMAssertionTypeNoDisplaySleep)
+//   Windows: SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_CONTINUOUS)
+//   Linux:   org.freedesktop.ScreenSaver.Inhibit
+// One cross-platform API, no shell calls, no stray-process cleanup.
 
-ipcMain.handle('sys:caffeinate-status', async () => {
-  // Check our own process first (fastest path).
-  if (_caffeinateProc && !_caffeinateProc.killed) return { on: true }
-  // Also catch stray caffeinate processes from before the app started.
-  try {
-    await execAsync('pgrep -x caffeinate', { timeout: 2000 })
-    return { on: true }
-  } catch {
-    return { on: false }
-  }
+ipcMain.handle('sys:caffeinate-status', () => {
+  return { on: _powerSaveId != null && powerSaveBlocker.isStarted(_powerSaveId) }
 })
 
-ipcMain.handle('sys:caffeinate-toggle', async (_event, on) => {
+ipcMain.handle('sys:caffeinate-toggle', (_event, on) => {
   if (on) {
-    if (_caffeinateProc && !_caffeinateProc.killed) return { ok: true }
-    _caffeinateProc = spawn('caffeinate', ['-d'], { detached: false })
-    _caffeinateProc.on('exit', () => {
-      _caffeinateProc = null
-    })
-  } else {
-    if (_caffeinateProc) {
-      _caffeinateProc.kill()
-      _caffeinateProc = null
+    if (_powerSaveId == null || !powerSaveBlocker.isStarted(_powerSaveId)) {
+      _powerSaveId = powerSaveBlocker.start('prevent-display-sleep')
     }
-    // Kill any stray system-level caffeinate processes too.
-    await execAsync('pgrep -x caffeinate | xargs kill 2>/dev/null || true', {
-      timeout: 2000,
-    }).catch(() => {})
+  } else if (_powerSaveId != null) {
+    try { powerSaveBlocker.stop(_powerSaveId) } catch { /* ignore */ }
+    _powerSaveId = null
   }
   return { ok: true }
 })
@@ -1512,10 +2209,17 @@ ipcMain.handle('sys:caffeinate-toggle', async (_event, on) => {
 // ---------- Focus ----------
 
 ipcMain.handle('sys:focus-set', async (_event, shortcutName) => {
+  // Focus modes are macOS-Shortcuts-specific; Windows Focus Assist has no
+  // documented CLI for programmatic control, so we no-op there. The renderer
+  // hides the Focus row entirely on Windows (see QuickSettingsTile).
+  if (process.platform !== 'darwin') return { ok: false, notSupported: true }
   // null shortcutName = deactivate (no standard shortcut for this, so just clear locally)
   if (!shortcutName) return { ok: true }
+  // execFile (argv form) — the prior `\`shortcuts run "${shortcutName}"\``
+  // template was a shell-injection sink: a Shortcut named e.g. `"; rm -rf ~"`
+  // would have escaped the quotes and run.
   try {
-    await execAsync(`/usr/bin/shortcuts run "${shortcutName}"`, { timeout: 15000 })
+    await execFileAsync('/usr/bin/shortcuts', ['run', String(shortcutName)], { timeout: 15000 })
     return { ok: true }
   } catch {
     return { ok: false, notConfigured: true }
@@ -1523,5 +2227,6 @@ ipcMain.handle('sys:focus-set', async (_event, shortcutName) => {
 })
 
 ipcMain.handle('sys:open-shortcuts', async () => {
+  if (process.platform !== 'darwin') return
   await execAsync('open -a Shortcuts').catch(() => {})
 })

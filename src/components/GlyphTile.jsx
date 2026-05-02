@@ -21,7 +21,7 @@ export default function GlyphTile() {
   usePolling(async () => {
     try {
       const t = await sys.uptime()
-      if (t) setUptime(t.uptime)
+      if (typeof t?.uptime === 'number' && Number.isFinite(t.uptime)) setUptime(t.uptime)
     } catch {
       /* best-effort */
     }
@@ -49,13 +49,16 @@ export default function GlyphTile() {
       .catch(() => {})
   }, [])
 
-  // Countdown tick
+  // Countdown tick — capture id locally so the cleanup clears *this* effect's
+  // interval, not whatever tickRef.current happens to point at when cleanup
+  // runs. (Reset/Start cycles can otherwise leak the prior interval.)
   useEffect(() => {
     if (!running) return
-    tickRef.current = setInterval(() => {
+    const id = setInterval(() => {
       setRemaining((r) => {
         if (r <= 1) {
-          clearInterval(tickRef.current)
+          clearInterval(id)
+          tickRef.current = null
           setRunning(false)
           setDone(true)
           sys.playSound('Glass')
@@ -66,7 +69,8 @@ export default function GlyphTile() {
         return r - 1
       })
     }, 1000)
-    return () => clearInterval(tickRef.current)
+    tickRef.current = id
+    return () => clearInterval(id)
   }, [running])
 
   const reset = () => {

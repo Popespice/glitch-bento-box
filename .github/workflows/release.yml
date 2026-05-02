@@ -5,9 +5,32 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which platforms to build'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - windows
+          - mac
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+
   build-mac:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'both' || github.event.inputs.target == 'mac'
+    needs: lint
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,8 +40,22 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # Cache Electron binaries — saves ~200MB and ~30s per run.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-electron-
+
       - run: npm ci
 
+      # OAuth client IDs are user-supplied at runtime; CI just needs the files
+      # to satisfy the static imports in electron/main.js.
+      # Only google-calendar-config is imported statically by main.js; spotify
+      # and github use PKCE / Device Flow with user-supplied client IDs at
+      # runtime (no bundled secrets), so no stub needed for those.
       - run: cp electron/google-calendar-config.example.js electron/google-calendar-config.js
 
       - run: npm run dist:mac
@@ -29,6 +66,8 @@ jobs:
           path: release/*.dmg
 
   build-win:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'both' || github.event.inputs.target == 'windows'
+    needs: lint
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +77,19 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-electron-
+
       - run: npm ci
 
+      # Only google-calendar-config is imported statically by main.js; spotify
+      # and github use PKCE / Device Flow with user-supplied client IDs at
+      # runtime (no bundled secrets), so no stub needed for those.
       - run: cp electron/google-calendar-config.example.js electron/google-calendar-config.js
 
       - run: npm run dist:win

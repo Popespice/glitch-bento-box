@@ -5,8 +5,11 @@ import { useEffect, useRef } from 'react'
  * Pauses entirely when the window/tab is hidden (Page Visibility API),
  * resumes on return — including an immediate call so stale data refreshes.
  *
+ * Pass `intervalMs = null` (or any falsy value) to disable the poll entirely
+ * for the duration of that render — useful for gating a tick on state.
+ *
  * @param {() => void | Promise<void>} callback
- * @param {number} intervalMs
+ * @param {number | null} intervalMs
  */
 export function usePolling(callback, intervalMs) {
   const cbRef = useRef(callback)
@@ -17,6 +20,7 @@ export function usePolling(callback, intervalMs) {
   })
 
   useEffect(() => {
+    if (!intervalMs) return // disabled — don't even attach the visibility listener
     let id = null
     const tick = () => {
       cbRef.current()
