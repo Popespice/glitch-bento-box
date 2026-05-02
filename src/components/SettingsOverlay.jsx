@@ -877,7 +877,6 @@ export default function SettingsOverlay({ onClose }) {
           )}
         </div>
         </div>
-        </div>
 
         <div className="settings-footer">
           <button
